@@ -74,8 +74,16 @@ export const problemReportSchema = z.object({
         .max(80)
         .regex(/^[^@/]*$/)
         .optional(),
-      arch: z.string().max(20).optional(),
-      browser: z.string().max(40).optional(),
+      arch: z
+        .string()
+        .max(20)
+        .regex(/^[^@/]*$/)
+        .optional(),
+      browser: z
+        .string()
+        .max(40)
+        .regex(/^[^@/]*$/)
+        .optional(),
     })
     .optional(),
   install: z.enum(["docker", "native", "desktop"]).nullable().optional(),
@@ -143,6 +151,8 @@ const SERVER_LOG_WINDOW_MS = 30 * 60_000;
 const LOG_LINES = 300;
 
 const fit = (s: string, max: number) => (s.length > max ? s.slice(0, max) : s);
+/** `versions.os`, `arch` and `browser` as the contract takes them: no `@` or `/`, cut to `max`. */
+const words = (s: string, max: number) => fit(s.replace(/[@/]/g, ""), max);
 const okCode = (s: string | null | undefined) => (s && CODE.test(s) ? s : null);
 const okVersion = (s: string | null | undefined) => (s && VERSION.test(s) ? s : undefined);
 
@@ -228,26 +238,27 @@ export async function buildProblemReport(
     (await db.select({ n: sql<number>`count(*)::int` }).from(table))[0]?.n ?? 0;
 
   const facts: Facts = {
-    // Room for the rest under the contract's 120.
-    ...Object.fromEntries(Object.entries(sources.config).slice(0, 60)),
+    // Room for the rest under the contract's 120: at most 50 settings, 5 here, 10 from the screen, 7 of a run, 9 of a
+    // computer, 23 of its runner and 2 notes on what's missing.
+    ...Object.fromEntries(Object.entries(sources.config).slice(0, 50)),
     "counts.orgs": await count(organizations),
     "counts.agents": await count(agents),
     "counts.machines": await count(machines),
     uptimeHours: Math.round(((now.getTime() - state.startedAt.getTime()) / 3600_000) * 10) / 10,
     "db.migrationsApplied": (await appliedMigrations(db)).length,
   };
-  for (const [key, value] of Object.entries(input.clientFacts ?? {}).slice(0, 20)) {
+  for (const [key, value] of Object.entries(input.clientFacts ?? {}).slice(0, 10)) {
     const name = `client.${key}`;
     if (!/^[a-z][a-zA-Z0-9_.]{0,63}$/.test(name)) continue;
     facts[name] = typeof value === "string" ? fit(value, 200) : value;
   }
   const versions: NonNullable<ProblemReport["versions"]> = {
     server: okVersion(sources.server.version),
-    os: fit(sources.server.os.replace(/[@/]/g, ""), 80),
-    arch: fit(sources.server.arch, 20),
+    os: words(sources.server.os, 80),
+    arch: words(sources.server.arch, 20),
     web: okVersion(input.client?.web),
     mobile: okVersion(input.client?.mobile),
-    ...(input.client?.browser ? { browser: fit(input.client.browser, 40) } : {}),
+    ...(input.client?.browser ? { browser: words(input.client.browser, 40) } : {}),
   };
   const logs: Log[] = [];
   const missing: ProblemReportMissing = {};

@@ -73,8 +73,14 @@ export function urlOrigin(url: string): string | null {
 }
 
 const URL_IN_TEXT = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>()[\]{}]+/gi;
-/** Home folders on macOS, Linux and Windows (both slashes), and Windows' variable for one. */
-const HOME_PATHS = /(?:\/Users\/|\/home\/|[A-Za-z]:[\\/]+Users[\\/]+)[^\\/\s"']+|%USERPROFILE%/gi;
+/**
+ * Home folders on macOS, Linux and Windows (both slashes), and Windows' variable for one. A Windows account name may
+ * hold spaces (`C:\\Users\\Jane Doe\\…`): taken whole when a separator follows it.
+ */
+const HOME_PATHS =
+  /(?:\/Users\/|\/home\/|[A-Za-z]:[\\/]+Users[\\/]+)(?:[^\\/\s"']+(?: [^\\/\s"']+)*(?=[\\/])|[^\\/\s"']+)|%USERPROFILE%/gi;
+/** A cookie header's value, whatever its cookies are called. */
+const COOKIE_HEADER = /\b((?:set-)?cookie["']?\s*[:=]\s*)[^\r\n]+/gi;
 /** What a log line may keep at most: longer ones are cut. */
 export const LOG_LINE_MAX = 1000;
 /** Labels a sender's known values (`scrubLogLine`'s `known`) become. */
@@ -90,20 +96,22 @@ export function scrubLogLine(line: string, known: ReadonlyArray<readonly [value:
   const values = [...known].filter(([v]) => v.trim().length >= 3).sort((a, b) => b[0].length - a[0].length);
   const label = (text: string, which: typeof values) =>
     which.reduce((out, [value, name]) => out.split(value).join(`[${name}]`), text);
-  // Names before the masks (a home folder may hold what reads as a token), the server's host after its URL is cut.
+  // Names before the masks (a home folder may hold what reads as a token). URLs are cut before `scrubText`, so a
+  // password in one (`postgres://user:p!ss@host`) goes with its credentials, not in part through the email mask; the
+  // server's host is labeled after.
   const out = label(
     scrubText(
       label(
         line,
         values.filter(([, name]) => name !== "server"),
-      ),
-    )
-      .replace(URL_IN_TEXT, (url) => {
-        const origin = urlOrigin(url);
-        if (!origin) return url;
-        return url.length > origin.length && url.slice(origin.length) !== "/" ? `${origin}/…` : origin;
-      })
-      .replace(HOME_PATHS, "~"),
+      )
+        .replace(COOKIE_HEADER, "$1***")
+        .replace(URL_IN_TEXT, (url) => {
+          const origin = urlOrigin(url);
+          if (!origin) return url;
+          return url.length > origin.length && url.slice(origin.length) !== "/" ? `${origin}/…` : origin;
+        }),
+    ).replace(HOME_PATHS, "~"),
     values,
   );
   return out.length > LOG_LINE_MAX ? out.slice(0, LOG_LINE_MAX) : out;

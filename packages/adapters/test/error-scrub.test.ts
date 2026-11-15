@@ -27,6 +27,14 @@ describe("scrubLogLine", () => {
     expect(scrubLogLine("/home/someone/x")).toBe("~/x");
   });
 
+  test("a URL's credentials go whole, cookies are masked, a Windows account name with spaces goes whole", () => {
+    expect(scrubLogLine("connect postgres://admin:p!ss@db.example.com:5432/agentes failed")).toBe(
+      "connect postgres://db.example.com:5432/… failed",
+    );
+    expect(scrubLogLine("Set-Cookie: sid=s%3Afake123.sig; Path=/")).toBe("Set-Cookie: ***");
+    expect(scrubLogLine("C:\\Users\\Some One\\.agentes-runner\\runner.log")).toBe("~\\.agentes-runner\\runner.log");
+  });
+
   test("known values become their labels", () => {
     expect(scrubLogLine("Machine Studio Box connected", [["Studio Box", "computer"]])).toBe(
       "Machine [computer] connected",

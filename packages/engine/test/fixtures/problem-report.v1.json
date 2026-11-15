@@ -11,38 +11,40 @@
     "versions": {
       "server": "2026.11.15.5",
       "runner": "2026.11.15.5",
-      "runnerProtocol": 68,
+      "runnerProtocol": 67,
       "web": "2026.11.15.5",
-      "os": "linux 6.8.0",
+      "os": "windows 10.0.22631",
       "arch": "x64",
       "browser": "chrome 142"
     },
-    "install": "docker",
-    "locale": "pt-BR",
+    "install": "desktop",
+    "locale": "en",
     "facts": {
       "config.SMTP_URL": "set",
-      "config.publicUrl": "https",
+      "config.TELEMETRY": "on",
+      "config.publicUrl": "loopback",
+      "counts.orgs": 1,
+      "counts.agents": 3,
       "machine.connection": "online",
-      "machine.lastSeenS": 4,
       "machine.paused": false,
-      "runnerLog": null
+      "browser.lastError": null
     },
     "logs": [
       {
         "name": "runner",
-        "lines": ["{\"level\":\"info\",\"msg\":\"browser open\",\"url\":\"https://example.com/…\"}"]
+        "lines": [
+          "2026-11-15T11:59:00.000Z info browser starting",
+          "2026-11-15T12:00:01.000Z warn browser no answer after 60s"
+        ]
       },
-      {
-        "name": "server",
-        "lines": ["{\"time\":\"2026-11-15T11:59:00.000Z\",\"level\":\"warn\",\"msg\":\"machine call timed out\"}"]
-      }
+      { "name": "server", "lines": ["2026-11-15T12:00:01.000Z info browser.open timed out"] }
     ],
     "note": "The agent's browser never opened.",
     "replyTo": "someone@example.com"
   },
   "minimal": {
     "format": 1,
-    "source": "desktop",
-    "place": "desktop_server"
+    "source": "server",
+    "place": "settings"
   }
 }
