@@ -40,6 +40,7 @@ import { Sky } from "@/sky/Sky";
 import { Button, Fuse, Icon, PixelOrbit, Text, useToast } from "@/ui";
 import { ScreenWatch, type ScreenWatchHandle } from "../computer/ScreenWatch";
 import { MachineToolButton } from "../devices/ToolOneClick";
+import { ReportProblemButton } from "../report/ReportProblemButton";
 import { useColors, useDirectory, useEdition, useMeId, useNow, useOrgId } from "../shared/hooks";
 import { agentLook, genderOf } from "../shared/logic";
 import { successHaptic, tapHaptic, useSurface } from "../shared/parts";
@@ -521,7 +522,17 @@ export function BrowserCard({
                     {offHere && profileMachine ? (
                       <MachineToolButton machine={profileMachine} tool="browser" onAllowed={retry} />
                     ) : note.say === "stuck" || note.say === "noAnswer" || (note.say === "unavailable" && profile) ? (
-                      <Button variant="secondary" size="sm" label={t("mobile.common.retry")} onPress={retry} />
+                      <View style={styles.noteActs}>
+                        <Button variant="secondary" size="sm" label={t("mobile.common.retry")} onPress={retry} />
+                        {note.say !== "unavailable" && (
+                          <ReportProblemButton
+                            place="browser"
+                            code={note.say === "noAnswer" ? "browser.no_answer" : "browser.stuck"}
+                            context={{ agentId, ...(profile?.machineId ? { machineId: profile.machineId } : {}) }}
+                            timings={{ attempts: attempt + 1 }}
+                          />
+                        )}
+                      </View>
                     ) : null}
                   </View>
                 </View>
@@ -633,6 +644,7 @@ const CARD = 20;
 const PAGE_INSET = 8;
 
 const styles = StyleSheet.create({
+  noteActs: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", justifyContent: "center", gap: 8 },
   card: { marginTop: 12, borderRadius: CARD, overflow: "hidden" },
   sky: { height: 6 },
   head: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 12, paddingVertical: 10 },

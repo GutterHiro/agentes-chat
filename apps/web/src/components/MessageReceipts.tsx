@@ -26,6 +26,7 @@ import { useOpenBilling } from "@/components/BillingLinkButton";
 import { FanOutStrip, QueuedWords } from "@/components/ComputerQueue";
 import { useConnectAi } from "@/components/ConnectAi";
 import { HelpLink } from "@/components/HelpLink";
+import { ReportProblem, useProblemReports } from "@/components/ReportProblem";
 import { useDirectory } from "@/hooks/useDirectory";
 import { STORAGE_KEYS, sessionStore } from "@/lib/storage";
 import { useToast } from "@/lib/toast";
@@ -160,6 +161,7 @@ export function MessageReceipts({ message, part }: { message: Message; part: "ch
   // reload), this line does.
   const failedAgent = status?.kind === "failed" && status.agents.length === 1 ? status.agents[0] : undefined;
   const failedRun = failedAgent ? receipt?.runOf?.[failedAgent] : undefined;
+  const reports = useProblemReports();
   const rowSaysWhy = useLive((s) => (failedRun ? s.streams.runs[failedRun]?.status === "failed" : false));
   const callAgent =
     actions && actions.channelAgents.length > 0 ? (
@@ -367,6 +369,11 @@ export function MessageReceipts({ message, part }: { message: Message; part: "ch
                 {retrying && <PixelSpinner size={14} />}
                 {t(retrying ? "receipts.retrying" : "receipts.retry")}
               </button>
+            </ReceiptAction>
+          )}
+          {failedRun && reports && (
+            <ReceiptAction>
+              <ReportProblem place="run" context={{ runId: failedRun }} className="ac-receipt__action" />
             </ReceiptAction>
           )}
         </span>

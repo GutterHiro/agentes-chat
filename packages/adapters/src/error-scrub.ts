@@ -62,6 +62,53 @@ export function urlPattern(url: string): string {
   }
 }
 
+/** A URL as its origin alone (`https://example.com`), or null when it isn't one. */
+export function urlOrigin(url: string): string | null {
+  try {
+    const { protocol, host } = new URL(url);
+    return host ? `${protocol}//${host}` : null;
+  } catch {
+    return null;
+  }
+}
+
+const URL_IN_TEXT = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>()[\]{}]+/gi;
+/** Home folders on macOS, Linux and Windows (both slashes), and Windows' variable for one. */
+const HOME_PATHS = /(?:\/Users\/|\/home\/|[A-Za-z]:[\\/]+Users[\\/]+)[^\\/\s"']+|%USERPROFILE%/gi;
+/** What a log line may keep at most: longer ones are cut. */
+export const LOG_LINE_MAX = 1000;
+/** Labels a sender's known values (`scrubLogLine`'s `known`) become. */
+export type KnownLabel = "server" | "computer" | "workspace" | "agent" | "person";
+
+/**
+ * One log line a person chose to send (a problem report): `scrubText`, then each URL as its origin with `/…` for any
+ * path, home folders as `~`, every `known` value as its label (`[computer]`), cut to `LOG_LINE_MAX`. Scrubbing a
+ * scrubbed line gives the same line.
+ */
+export function scrubLogLine(line: string, known: ReadonlyArray<readonly [value: string, label: KnownLabel]> = []) {
+  // Longest first: a machine called "box" never eats part of "box-2".
+  const values = [...known].filter(([v]) => v.trim().length >= 3).sort((a, b) => b[0].length - a[0].length);
+  const label = (text: string, which: typeof values) =>
+    which.reduce((out, [value, name]) => out.split(value).join(`[${name}]`), text);
+  // Names before the masks (a home folder may hold what reads as a token), the server's host after its URL is cut.
+  const out = label(
+    scrubText(
+      label(
+        line,
+        values.filter(([, name]) => name !== "server"),
+      ),
+    )
+      .replace(URL_IN_TEXT, (url) => {
+        const origin = urlOrigin(url);
+        if (!origin) return url;
+        return url.length > origin.length && url.slice(origin.length) !== "/" ? `${origin}/…` : origin;
+      })
+      .replace(HOME_PATHS, "~"),
+    values,
+  );
+  return out.length > LOG_LINE_MAX ? out.slice(0, LOG_LINE_MAX) : out;
+}
+
 /** A breadcrumb's data a report keeps: where a request or a navigation went and how it ended, never what it carried. */
 const CRUMB_DATA = ["method", "status_code", "url", "from", "to"] as const;
 

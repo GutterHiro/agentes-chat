@@ -37,6 +37,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AgentAvatar } from "@/components/AgentAvatar";
 import { useOrg } from "@/components/org-context";
+import { ReportProblem } from "@/components/ReportProblem";
 import { RequestDone, RequestOpen } from "@/components/RequestCard";
 import { ReconnectThisMacButton, useIsThisMac } from "@/components/ThisMac";
 import { useComputerEdition } from "@/components/WorkspaceComputer";
@@ -157,6 +158,7 @@ function OutageNotice({
             {t("outage.switch")}
           </Button>
         )}
+        <ReportProblem place="computer" code="computer.offline" context={{ machineId: o.machineId }} />
       </span>
       <Button
         variant="ghost"

@@ -1,0 +1,48 @@
+{
+  "full": {
+    "format": 1,
+    "instance": "test_instance_000000",
+    "source": "server",
+    "place": "browser",
+    "code": "browser.no_answer",
+    "step": "open",
+    "happenedAt": "2026-11-15T12:00:00.000Z",
+    "timings": { "openMs": 61000, "attempts": 2 },
+    "versions": {
+      "server": "2026.11.15.5",
+      "runner": "2026.11.15.5",
+      "runnerProtocol": 68,
+      "web": "2026.11.15.5",
+      "os": "linux 6.8.0",
+      "arch": "x64",
+      "browser": "chrome 142"
+    },
+    "install": "docker",
+    "locale": "pt-BR",
+    "facts": {
+      "config.SMTP_URL": "set",
+      "config.publicUrl": "https",
+      "machine.connection": "online",
+      "machine.lastSeenS": 4,
+      "machine.paused": false,
+      "runnerLog": null
+    },
+    "logs": [
+      {
+        "name": "runner",
+        "lines": ["{\"level\":\"info\",\"msg\":\"browser open\",\"url\":\"https://example.com/…\"}"]
+      },
+      {
+        "name": "server",
+        "lines": ["{\"time\":\"2026-11-15T11:59:00.000Z\",\"level\":\"warn\",\"msg\":\"machine call timed out\"}"]
+      }
+    ],
+    "note": "The agent's browser never opened.",
+    "replyTo": "someone@example.com"
+  },
+  "minimal": {
+    "format": 1,
+    "source": "desktop",
+    "place": "desktop_server"
+  }
+}

@@ -7,7 +7,7 @@ import type { MergeDone } from "./command-policy";
  */
 
 /** Bumped on breaking changes; the server refuses runners older than `MIN_RUNNER_PROTOCOL`. */
-export const MACHINE_PROTOCOL_VERSION = 67;
+export const MACHINE_PROTOCOL_VERSION = 68;
 export const MIN_RUNNER_PROTOCOL = 1;
 /** From this protocol on, requests carry `agent` and each agent works in its own folder. */
 export const AGENT_FOLDERS_PROTOCOL = 2;
@@ -685,6 +685,33 @@ export const SHARED_GROK_PROTOCOL = 67;
  * runner holds the installers. Older runners answer `bad_request`: the server asks none of them.
  */
 export const CLI_INSTALL_PROTOCOL = 66;
+/**
+ * `report.collect`: the facts and the scrubbed end of its log a computer adds to a problem report someone chose to
+ * send. The server asks no older runner, and says in the report that its log is missing.
+ */
+export const PROBLEM_REPORT_PROTOCOL = 68;
+/** Lines of the runner's log `report.collect` gives, at most. */
+export const REPORT_LOG_LINES = 300;
+
+/** What `report.collect` answers: no paths, names or addresses (the log tail is scrubbed on the computer). */
+export interface RunnerReportParts {
+  runner: string;
+  protocol: number;
+  runtime: string;
+  os: string;
+  arch: string;
+  compiled: boolean;
+  managedBy: string;
+  connection: string;
+  paused: boolean;
+  tools: Record<string, boolean>;
+  executors: { claude?: string; codex?: string; claudeLoggedIn?: boolean };
+  agents: number;
+  runningNow: number;
+  browser?: { state: string; chrome?: string; lastError?: string };
+  logTail: string[];
+}
+
 /** The coding CLIs `cli.install` installs: Claude Code and Codex. */
 export const INSTALLABLE_CLIS = ["claude", "codex"] as const;
 export type InstallableCli = (typeof INSTALLABLE_CLIS)[number];
@@ -2694,6 +2721,8 @@ export type MachineRequest = (
   | { op: "cli.install"; action: "start" | "status" | "cancel"; tool?: InstallableCli }
   /** `IPHONE_DEV_MODE_PROTOCOL`: open Xcode on this Mac (it shows Developer Mode on a plugged iPhone). */
   | { op: "xcode.open" }
+  /** `PROBLEM_REPORT_PROTOCOL`: facts and the scrubbed log tail for a problem report. */
+  | { op: "report.collect" }
 ) & {
   agent?: AgentScope;
   /** Protocol 34: a `browser.*` op in this browser profile's session instead of the agent's (ADR 0110). */
@@ -2774,6 +2803,7 @@ export const MACHINE_OPS: readonly MachineOp[] = [
   "clis.check",
   "cli.install",
   "xcode.open",
+  "report.collect",
 ];
 
 /** What each op answers with `ok: true`. */
@@ -2945,6 +2975,7 @@ export interface MachineReplies {
   "clis.check": { executors: NonNullable<RunnerInfo["executors"]> };
   "cli.install": { install: CliInstall | null };
   "xcode.open": { opened: boolean };
+  "report.collect": RunnerReportParts;
 }
 
 /** An element numbered on a `browser.capture` image: its ref and box (CSS pixels). */
