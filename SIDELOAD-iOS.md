@@ -16,32 +16,41 @@ Para atualizar o app depois: no fork, **Sync fork** e rode o workflow de novo.
 
 ## 2. Preparar o Windows (uma vez)
 
-1. Instale **iTunes** e **iCloud** baixados do site da Apple (não da Microsoft Store — o AltServer não
-   funciona com essas versões):
-   - iTunes: https://www.apple.com/itunes/download/win64
-   - iCloud: use o link "versão não-Microsoft Store" indicado no guia do AltStore para Windows
-     (https://faq.altstore.io), que muda de tempos em tempos.
-2. Instale o **AltServer** (https://altstore.io) e abra-o (ícone na bandeja).
-3. Ligue o iPhone no cabo, toque em "Confiar" e, no iTunes, marque **Sincronizar via Wi‑Fi**.
+1. Instale o app **Apple Devices** pela Microsoft Store. Com iOS recente, o iTunes para Windows não
+   reconhece o iPhone ("não pôde ser identificado"); a Apple indica o Apple Devices
+   (https://support.apple.com/en-us/108643). Não deixe iTunes e Apple Devices instalados juntos.
+2. Instale o **iCloud** (site da Apple ou Store) e o **AltServer** (https://altstore.io) e abra o AltServer
+   (ícone na bandeja).
+3. Ligue o iPhone no cabo, desbloqueado, e toque em "Confiar". Ele deve aparecer na barra lateral do
+   Apple Devices; lá, ative mostrar o iPhone no Wi‑Fi.
+4. Para renovar pelo Wi‑Fi: instale o **Bonjour Print Services for Windows** (site da Apple) e deixe a
+   rede do PC como **Privada**.
+
+### Se o iPhone não aparecer
+
+- **Troque o cabo primeiro.** Um cabo com defeito ainda deixa o PC ver fotos (pede "Permitir acesso"),
+  mas não deixa o Apple Devices/AltServer reconhecer o iPhone. Use porta USB direta, sem hub.
+- Desbloqueie o iPhone e toque em "Confiar"; se não pedir, Ajustes → Geral → Transferir ou Redefinir →
+  Redefinir → **Redefinir Localização e Privacidade** e reconecte.
+- Depois de mexer em drivers ou serviços da Apple, feche e reabra o AltServer.
 
 ## 3. Instalar no iPhone
 
 1. Bandeja → AltServer → **Install AltStore** → seu iPhone → Apple ID (use um Apple ID secundário se preferir).
 2. No iPhone: Ajustes → Geral → VPN e Gerenciamento de Dispositivo → confiar no seu Apple ID.
 3. Ajustes → Privacidade e Segurança → **Modo de Desenvolvedor** → ligar (reinicia o iPhone).
-4. Passe o `agentes-unsigned.ipa` para o iPhone (AirDrop não existe no Windows: use iCloud Drive, OneDrive
+4. Com o AltServer aberto no PC (iPhone no cabo ou na mesma rede — senão o AltStore diz
+   "AltServer não encontrado"), passe o `agentes-unsigned.ipa` para o iPhone (AirDrop não existe no Windows: use iCloud Drive, OneDrive
    ou o app Arquivos) e abra-o com o AltStore, ou no AltStore: **My Apps → +** → escolha o `.ipa`.
-5. Se o AltStore perguntar sobre extensões e a instalação falhar, instale de novo escolhendo **remover as
-   extensões** (só perde o "Compartilhar com…").
-6. Abra o app e entre pelo QR code de "Abrir no celular" do app web, ou troque o servidor na tela de login.
+5. Abra o app e entre pelo QR code de "Abrir no celular" do app web, ou troque o servidor na tela de login.
 
 ## Limites da conta gratuita
 
 - **Vale 7 dias.** Deixe o PC com AltServer aberto na mesma Wi‑Fi: o AltStore renova sozinho
   (ou abra o AltStore → **Refresh All**). Se vencer, o app não abre até renovar, mas os dados ficam.
-- No máximo 3 apps de sideload ativos e 10 App IDs por semana (a extensão de compartilhar conta como um).
+- No máximo 3 apps de sideload ativos e 10 App IDs por semana.
 - **Não funcionam:** notificações push, "Entrar com a Apple", links universais (abrir links do site no app)
-  e, provavelmente, o "Compartilhar com…" (o AltStore troca o bundle id e o app group).
+  e o "Compartilhar com…" (este build sai sem a extensão de compartilhar).
 - Funcionam: login por e-mail/QR code, chat, servidor próprio, câmera, áudio, arquivos.
 
 Com a conta paga (US$ 99/ano) o app dura 1 ano e o push funciona — aí use o `ios.yml` original ou EAS.
