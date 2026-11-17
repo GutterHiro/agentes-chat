@@ -393,6 +393,20 @@ beforeAll(async () => {
       },
     },
   });
+  // A run of a confidential thread (ADR 0190) that failed on what it read: its error's words are not returned.
+  const confidentialRoot = crypto.randomUUID();
+  await db.insert(schema.confidentialThreads).values({ orgId, channelId, rootMessageId: confidentialRoot });
+  await db.insert(schema.agentRuns).values({
+    orgId,
+    agentId,
+    channelId,
+    threadRootId: confidentialRoot,
+    triggerMessageId: confidentialRoot,
+    trigger: "mention",
+    hop: 1,
+    status: "failed",
+    error: "canary-confidential: what the run read",
+  });
 
   // What the conversation didn't write, each with its canary.
   const [user] = await db

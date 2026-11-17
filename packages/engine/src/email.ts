@@ -21,6 +21,7 @@ import { nanoUsdToUsd } from "@agenteschat/providers";
 import { z } from "zod";
 import { notifiedIds } from "./approvals";
 import { isComputerBrain, planName } from "./brains/types";
+import { confidentialRoots } from "./confidential";
 import { invitationMailProof } from "./crypto";
 import { inertText } from "./email/inert";
 import {
@@ -667,7 +668,7 @@ function docOf(t: EmailTemplate, sender: string | null): EmailDoc {
             people: shown.map((i) => ({
               name: inertText(i.agentName) || w.anAgent,
               agent: i.agentColor ?? "sky",
-              detail: `${inertText(i.title, 120)} · ${c.age(Math.max(1, Math.round(i.ageHours)))}`,
+              detail: [inertText(i.title, 120), c.age(Math.max(1, Math.round(i.ageHours)))].filter(Boolean).join(" · "),
             })),
           },
           ...(n > shown.length ? [{ small: c.more(n - shown.length) }] : []),
@@ -1451,6 +1452,8 @@ export async function queueApprovalDigests(db: Database, publicUrl: string, afte
     .from(agents)
     .where(inArray(agents.id, [...new Set(due.map((a) => a.agentId))]));
   const agentOf = new Map(agentRows.map((a) => [a.id, a]));
+  // A request made in a confidential thread (ADR 0190) is counted and never quoted: its title is the agent's words.
+  const sealed = await confidentialRoots(db, [...new Set(due.map((a) => a.threadRootId))]);
   let queued = 0;
   for (const orgId of new Set(due.map((a) => a.orgId))) {
     const mine = due.filter((a) => a.orgId === orgId);
@@ -1486,7 +1489,7 @@ export async function queueApprovalDigests(db: Database, publicUrl: string, afte
             items: items.map((i) => ({
               agentName: agentOf.get(i.agentId)?.name ?? "",
               agentColor: agentOf.get(i.agentId)?.appearance?.color,
-              title: i.title,
+              title: sealed.has(i.threadRootId) ? "" : i.title,
               ageHours: (now.getTime() - i.createdAt.getTime()) / 3600_000,
             })),
             // One request: the button opens it.
