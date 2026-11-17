@@ -2,9 +2,12 @@ name: iOS sideload (unsigned .ipa)
 
 # Builds an UNSIGNED .ipa for personal sideloading with AltStore/SideStore (free Apple ID), with no Apple secrets.
 # Same steps as ios.yml up to the archive, but with signing off; AltStore signs the app on the phone's side.
-# Runs only by hand (Actions → iOS sideload → Run workflow). See SIDELOAD-iOS.md.
+# Builds this branch with upstream's main merged in. By hand (Actions → iOS sideload → Run workflow), or daily at
+# 03:00 BRT when upstream's app code changed in the last day. See SIDELOAD-iOS.md.
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *"
 
 permissions:
   contents: read
@@ -17,14 +20,41 @@ defaults:
   run:
     shell: bash
 
+env:
+  UPSTREAM: https://github.com/agentes-chat/agentes-chat.git
+
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.changed.outputs.build }}
+    steps:
+      - id: changed
+        run: |
+          if [ "${{ github.event_name }}" != schedule ]; then echo build=true >> "$GITHUB_OUTPUT"; exit 0; fi
+          git init -q up && cd up
+          git fetch -q --filter=blob:none --shallow-since="2 days ago" "$UPSTREAM" main
+          changes=$(git log --since="25 hours ago" --oneline FETCH_HEAD -- apps/mobile packages package.json bun.lock | wc -l)
+          echo "::notice::$changes upstream commits touching the app in the last 25 h"
+          echo build=$([ "$changes" -gt 0 ] && echo true || echo false) >> "$GITHUB_OUTPUT"
+
   build:
+    needs: check
+    if: needs.check.outputs.build == 'true'
     runs-on: macos-26
     timeout-minutes: 90
     env:
       APP_VARIANT: production
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Merge upstream main
+        run: |
+          git config user.name ci && git config user.email ci@localhost
+          git fetch -q "$UPSTREAM" main
+          git merge --no-edit FETCH_HEAD
+          echo "::notice::upstream $(git rev-parse --short FETCH_HEAD)"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
