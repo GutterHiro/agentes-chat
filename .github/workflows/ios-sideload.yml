@@ -102,3 +102,17 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+      # Optional: with the RCLONE_CONF secret (an rclone remote named gdrive, scope drive.file), the .ipa also goes to
+      # Google Drive's agentes-ios folder, replacing the previous one. See SIDELOAD-iOS.md.
+      - name: Google Drive
+        env:
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+        run: |
+          if [ -z "$RCLONE_CONF" ]; then echo "::notice::no RCLONE_CONF, skipping Drive"; exit 0; fi
+          brew install --quiet rclone
+          printf '%s\n' "$RCLONE_CONF" > "$RUNNER_TEMP/rclone.conf"
+          export RCLONE_CONFIG="$RUNNER_TEMP/rclone.conf"
+          rclone delete gdrive:agentes-ios --include "*.ipa" 2>/dev/null || true
+          name="agentes-$(TZ=America/Sao_Paulo date +%F)-build${{ github.run_number }}.ipa"
+          rclone copyto "$RUNNER_TEMP/ipa/agentes-unsigned.ipa" "gdrive:agentes-ios/$name"
+          echo "::notice::Drive: agentes-ios/$name"
