@@ -1,5 +1,5 @@
 import { type Wallpaper, type WallpaperHue, wallpaperName } from "@agenteschat/client/lib/wallpaper";
-import { rgbOf } from "@agenteschat/ui/agent/engine";
+import { drawnKey, rgbOf } from "@agenteschat/ui/agent/engine";
 import {
   CROWD,
   CROWD_EYES,
@@ -76,7 +76,7 @@ const pageOf = (dark: boolean) => (dark ? WALLPAPER_PAGE.dark : WALLPAPER_PAGE.l
 const skies = new Map<string, SkImage | null>();
 
 function skyImage(hues: readonly WallpaperHue[], w: number, h: number, dark: boolean, details: boolean) {
-  const key = `${hues.join(",")}|${w}x${h}|${dark ? 1 : 0}|${details ? 1 : 0}`;
+  const key = `${hues.map(drawnKey).join(";")}|${w}x${h}|${dark ? 1 : 0}|${details ? 1 : 0}`;
   const hit = skies.get(key);
   if (hit !== undefined) return hit;
   const image = Skia.Image.MakeImage(
@@ -252,7 +252,8 @@ function useWallpaperPicture(
   const photo = useWallpaperPhoto(wallpaper.kind === "photo" ? wallpaper.url : null);
   const W = Math.round(width);
   const H = Math.round(height);
-  const key = `${wallpaperKey(wallpaper)}|${bands.join(",")}|${W}x${H}|${dark ? 1 : 0}|${strength}|${tile ? 1 : 0}`;
+  // The sky as drawn now: the crowd and "auto" draw `sky`, which follows the workspace's accent.
+  const key = `${wallpaperKey(wallpaper)}|${bands.join(",")}|${drawnKey("sky")}|${W}x${H}|${dark ? 1 : 0}|${strength}|${tile ? 1 : 0}`;
   // biome-ignore lint/correctness/useExhaustiveDependencies: the key holds everything the picture is painted from
   return useMemo(() => {
     if (W <= 0 || H <= 0 || wallpaper.kind === "none") return null;
@@ -332,7 +333,14 @@ const sameProps = (a: ChatWallpaperProps, b: ChatWallpaperProps) =>
 export const ChatWallpaper = memo(ChatWallpaperView, sameProps);
 
 /** From solid to clear under the bar, as the conversation's own fade (alpha only: the colors are the background's). */
-const BAND_ALPHA = ["rgba(0,0,0,1)", "rgba(0,0,0,1)", "rgba(0,0,0,0.86)", "rgba(0,0,0,0)"];
+const BAND_ALPHA = ["rgba(0,0,0,1)", "rgba(0,0,0,1)", "rgba(0,0,0,0)"];
+
+/**
+ * How tall the conversation's fade is above the composer's box (points): above it the conversation shows, below it the
+ * box is solid. The box's first line (who is working, the reply bar) sits right under it, never over the words of a
+ * message passing behind (a fade down the box's top third ran right through that line).
+ */
+export const DOCK_FADE = 16;
 
 function WallpaperBandView({
   wallpaper,
@@ -348,7 +356,7 @@ function WallpaperBandView({
   height: number;
   /** How tall the band is (the bar and a little under it). */
   band: number;
-  /** How far down it stays solid, as a share of `band` (the status bar's). */
+  /** How far down it stays solid, as a share of `band` (the status bar and the bar's own height). */
   solid: number;
   strength?: number;
 }) {
@@ -368,12 +376,7 @@ function WallpaperBandView({
           mode="alpha"
           mask={
             <Rect x={0} y={0} width={width} height={band}>
-              <LinearGradient
-                start={vec(0, 0)}
-                end={vec(0, band)}
-                colors={BAND_ALPHA}
-                positions={[0, from, Math.max(0.62, from), 1]}
-              />
+              <LinearGradient start={vec(0, 0)} end={vec(0, band)} colors={BAND_ALPHA} positions={[0, from, 1]} />
             </Rect>
           }
         >
@@ -386,14 +389,14 @@ function WallpaperBandView({
 }
 
 /**
- * The top of a conversation over its background: the background itself again, solid behind the status bar and fading
- * out under the bar, so a message scrolled up there never shows through the clock (the conversation's fade, in the
- * background's own colors instead of the page's).
+ * The top of a conversation over its background: the background itself again, solid behind the status bar and the bar
+ * and fading out under it, so a message scrolled up there never shows through the clock or the bar's pill (the
+ * conversation's fade, in the background's own colors instead of the page's).
  */
 export const WallpaperBand = memo(WallpaperBandView);
 
-/** From clear to solid down the composer's box, as the conversation's own fade under it. */
-const UNDER_ALPHA = ["rgba(0,0,0,0)", "rgba(0,0,0,0.9)", "rgba(0,0,0,1)"];
+/** From clear to solid in the composer's box's first `DOCK_FADE` points, as the conversation's own fade under it. */
+const UNDER_ALPHA = ["rgba(0,0,0,0)", "rgba(0,0,0,1)", "rgba(0,0,0,1)"];
 
 function WallpaperUnderView({
   wallpaper,
@@ -439,7 +442,12 @@ function WallpaperUnderView({
             mode="alpha"
             mask={
               <Rect x={0} y={0} width={width} height={tall}>
-                <LinearGradient start={vec(0, 0)} end={vec(0, tall)} colors={UNDER_ALPHA} positions={[0, 0.3, 1]} />
+                <LinearGradient
+                  start={vec(0, 0)}
+                  end={vec(0, tall)}
+                  colors={UNDER_ALPHA}
+                  positions={[0, Math.min(1, DOCK_FADE / tall), 1]}
+                />
               </Rect>
             }
           >

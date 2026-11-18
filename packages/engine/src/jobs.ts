@@ -25,7 +25,8 @@ import { HANDOFF_REMIND_JOB, remindBrowserHandoff } from "./browser/handoff";
 import { typingLogFor } from "./burst";
 import { CHANNEL_DELETE_JOB, purgeChannel } from "./channel-deletion";
 import { crowdedAgents, publishQueueChanged } from "./computer-queue";
-import type { ConnectorDeps } from "./connectors/connections";
+import { forgetComposioAccount } from "./connectors/composio";
+import { CONNECTOR_FORGET_JOB, type ConnectorDeps } from "./connectors/connections";
 import { startNoteRun } from "./consultations";
 import { getChannelCached } from "./context";
 import { consolidateOrg } from "./context/consolidate";
@@ -86,6 +87,7 @@ import {
   type TaskCall,
   wakeConversationForTask,
 } from "./machine-tasks";
+import { WAKE_OVERDUE_JOB, wakeOverdue } from "./machine-wake";
 import { isMediaAfterReply, isMediaOnly } from "./media";
 import { getMessage, referencedOf } from "./messages";
 import { checkMissionDone } from "./mission-delivery";
@@ -125,6 +127,8 @@ import type { SkillDeps } from "./skills";
 import { TEAM_HELLO_JOB } from "./standing";
 import { purgeOrgFiles, purgeUserFiles, runMigration, type StorageDeps } from "./storage";
 import { postStretchCard, STRETCH_JOB, type StretchHold } from "./stretch";
+import { forgetReplyWords } from "./support-requests";
+import { fallBack, queueSurfaceDelivery, SURFACE_FALLBACK_JOB } from "./surfaces/deliveries";
 import { sayTeamHello } from "./team-templates";
 import { postTeamWeek, TEAM_DAY_JOB, TEAM_WEEK_JOB } from "./team-week";
 import { isAgentesCloud } from "./telemetry";
@@ -984,14 +988,19 @@ export function createJobHandlers(deps: JobDeps): JobHandlers {
       );
     },
     "email.send": async (job, ctx) => {
+      // What an email's job must not keep once it can't be sent again: a code's whole row, a reply's own words.
+      const forget = async () => {
+        await forgetCodeEmail(deps.db, job);
+        await forgetReplyWords(deps.db, job);
+      };
       try {
         if (!deps.email) throw new PermanentJobError("no email sender configured");
         await sendQueuedEmail(deps.email, job.payload, deps.emailArt);
       } catch (error) {
-        if (ctx.finalAttempt || error instanceof PermanentJobError) await forgetCodeEmail(deps.db, job);
+        if (ctx.finalAttempt || error instanceof PermanentJobError) await forget();
         throw error;
       }
-      await forgetCodeEmail(deps.db, job);
+      await forget();
     },
     // The team says hi in #general once it can work (ADR 0162).
     [TEAM_HELLO_JOB]: async (job) => {
@@ -1086,6 +1095,10 @@ export function createJobHandlers(deps: JobDeps): JobHandlers {
         statusOnly: job.payload.statusOnly === true,
       });
     },
+    // A computer in standby wanted awake a grace ago: still asleep, people see it down (ADR 0161).
+    [WAKE_OVERDUE_JOB]: async (job) => {
+      await wakeOverdue({ db: deps.db, pubsub: deps.pubsub }, String(job.payload.machineId));
+    },
     // A task start cut by a drop, once it can't still be underway: the agent's journal on its computer settles it.
     "machine.task_start_check": async (job) => {
       const hub = missions.hub;
@@ -1132,10 +1145,15 @@ export function createJobHandlers(deps: JobDeps): JobHandlers {
     },
     // In-app notifications of a message: mentions, thread replies, DMs.
     "notifications.message": async (job) => {
-      await notifyMessage({ db: deps.db, pubsub: deps.pubsub }, orgOf(job), String(job.payload.messageId));
+      const messageId = String(job.payload.messageId);
+      // A reply read on an outside chat surface goes there instead (ADR 0187); it falls back to this if not sent.
+      if (!(await queueSurfaceDelivery(deps.db, orgOf(job), messageId))) {
+        await notifyMessage({ db: deps.db, pubsub: deps.pubsub }, orgOf(job), messageId);
+      }
       // A reply in a task's conversation (ADR 0145): the board's card counts it.
-      await announceTaskConversation({ db: deps.db, pubsub: deps.pubsub }, orgOf(job), String(job.payload.messageId));
+      await announceTaskConversation({ db: deps.db, pubsub: deps.pubsub }, orgOf(job), messageId);
     },
+    [SURFACE_FALLBACK_JOB]: (job) => fallBack({ db: deps.db, pubsub: deps.pubsub }, String(job.payload.deliveryId)),
     // A request for help in an agent's browser nobody answered within the hour: the people asked hear it again, once.
     [HANDOFF_REMIND_JOB]: async (job) => {
       await remindBrowserHandoff({ db: deps.db, pubsub: deps.pubsub }, orgOf(job), String(job.payload.handoffId));
@@ -1152,6 +1170,13 @@ export function createJobHandlers(deps: JobDeps): JobHandlers {
     [SKILL_UPDATES_JOB]: async (job) => {
       if (!deps.skills) return;
       await runSkillUpdates(deps.skills, orgOf(job));
+    },
+    // One-click accounts of personal connections that went with their person (`dropPersonalConnections`).
+    [CONNECTOR_FORGET_JOB]: async (job) => {
+      const client = deps.connectors?.composio?.client ?? deps.mail?.composio?.client;
+      if (!client) return;
+      const ids = Array.isArray(job.payload.accountIds) ? job.payload.accountIds : [];
+      for (const id of ids) if (typeof id === "string") await forgetComposioAccount(client, id);
     },
     // A Vault connection read again (ADR 0144); a source's refusal stays on the connection, never retried here.
     [VAULT_SYNC_JOB]: async (job) => {

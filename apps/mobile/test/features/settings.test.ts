@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AuthConfig, ComputerSetup, Machine, StorageConfig } from "@agenteschat/client";
+import type { AuditRow, AuthConfig, ComputerSetup, Machine, StorageConfig } from "@agenteschat/client";
 import { showsAbout } from "@agenteschat/client/lib/about";
+import { auditOutcome, auditReason, auditSentence, auditSubLine } from "@agenteschat/client/lib/audit";
 import { type SetupView, setupView } from "@agenteschat/client/lib/computer";
 import { proofToSend } from "@agenteschat/client/lib/deletion";
 import { changedByText, changesSinceLink, skillPendingViews, skillUpdateWords } from "@agenteschat/client/lib/skills";
@@ -656,7 +657,8 @@ test("Sobre o agentes.chat in Você: on every self-hosted server, old ones too; 
   // Nor before the server says which it is: the Cloud never shows it for a moment.
   expect(showsAbout(undefined)).toBe(false);
   const me = readFileSync(join(import.meta.dir, "..", "..", "src", "features", "me", "MeScreen.tsx"), "utf8");
-  expect(me).toContain("const about = showsAbout(useAuthConfig().data);");
+  expect(me).toContain("const server = useAuthConfig().data;");
+  expect(me).toContain("const about = showsAbout(server);");
   expect(me).toContain("{about ? (");
   expect(me).toContain('onPress={() => open("/me/about")}');
 });
@@ -666,6 +668,51 @@ test("Auditoria's row screen: the call's title in words, and what the tool said 
   expect(src).toContain("title={auditHint(t, row) ?? auditPhrase(t, row, i18n.language)}");
   const tech = src.slice(src.indexOf('t("audit.panel.tech")'));
   expect(tech).toContain('label={t("audit.panel.techSaid")} sub={said}');
+});
+
+test("Auditoria says an operator's read of the workspace in the words the web uses: the sentence, why under it and on the row's screen", () => {
+  const src = readFileSync(join(import.meta.dir, "..", "..", "src", "features", "settings", "AuditScreen.tsx"), "utf8");
+  // The list's row: who read what, and under it at whose request or for which fault.
+  expect(src).toContain("const { name, text } = auditSentence(t, row, i18n.language);");
+  expect(src).toContain("const sub = auditSubLine(t, row);");
+  // The row's own screen says why in the reason's place.
+  expect(src).toContain("const reason = auditReason(t, row);");
+  expect(src).toContain("{reason ? (");
+});
+
+test("Auditoria says an operator's answer to a support request as the web does: who answered and how, whose request under it and on the row's screen", async () => {
+  const [pt, en] = [await translator("pt-BR"), await translator("en")];
+  const name = "Maria Aleksandra Wiśniewska-Kowalczyk de Vasconcelos";
+  const replied = (details: Record<string, unknown>, onBehalfOf: AuditRow["onBehalfOf"]): AuditRow => ({
+    id: "p1",
+    at: "2026-10-28T12:00:00Z",
+    actor: { type: "system", id: null, name: null },
+    action: "operator.support_replied",
+    target: { type: "support_request", id: "req-1" },
+    details,
+    runId: null,
+    channelId: null,
+    channel: null,
+    onBehalfOf,
+    outcome: null,
+    approval: null,
+    secret: null,
+  });
+  const assisted = replied({ template: "text", chars: 1840, assistedByAi: true }, { id: "u1", name });
+  // The list's row: no name before the sentence (the system's), so the label is the sentence alone.
+  expect(auditSentence(pt, assisted, "pt-BR")).toEqual({
+    name: null,
+    text: "Quem cuida deste servidor respondeu por e-mail",
+  });
+  expect(auditSubLine(pt, assisted)).toBe(`pedido de suporte de ${name} · com um assistente de IA`);
+  expect(auditSentence(en, assisted, "en").text).toBe("Whoever runs this server answered by email");
+  // The row's own screen says it whole in the reason's place: the list's line is one line there.
+  expect(auditReason(en, assisted)).toBe(`support request from ${name} · with an AI assistant`);
+  // On agentes.chat's own servers, with no AI assistant, of an account that is gone since.
+  const plain = replied({ template: "received", chars: 0, assistedByAi: false, cloud: true }, null);
+  expect(auditSentence(en, plain, "en").text).toBe("agentes.chat support answered by email");
+  expect(auditSubLine(en, plain)).toBe("support request from Removed");
+  expect(auditOutcome(en, plain)).toBeNull();
 });
 
 test("my photo on Você changes it with a tap, through Conta's own Alterar foto", () => {
