@@ -2,7 +2,6 @@ import {
   activeRunsIn,
   addChannelMember,
   answerNow,
-  can,
   cancelFollowUp,
   channelCard,
   consultationConversation,
@@ -40,7 +39,7 @@ import {
   requireSession,
   security,
 } from "./context";
-import { Channel, Message, PendingReturn } from "./schemas";
+import { Channel, LiveSelection, Message, PendingReturn } from "./schemas";
 
 const tags = ["Chat"];
 const ChannelParams = OrgParams.extend({ channelId: z.uuid() });
@@ -111,6 +110,7 @@ export function chatRoutes(deps: AppDeps) {
             createdAt: r.createdAt.toISOString(),
             categoryId: r.categoryId,
             position: r.position,
+            replyInThreads: r.replyInThreads,
             unreadCount: r.unreadCount,
             mentionCount: r.mentionCount,
             lastReadAt: iso(r.lastReadAt),
@@ -230,6 +230,7 @@ export function chatRoutes(deps: AppDeps) {
           createdAt: r.createdAt.toISOString(),
           categoryId: r.categoryId,
           position: r.position,
+          replyInThreads: r.replyInThreads,
         },
         201,
       );
@@ -442,6 +443,10 @@ export function chatRoutes(deps: AppDeps) {
                   description:
                     "Work in the background (a routine's, or long work, ADR 0121): not the conversation's working row.",
                 }),
+                replyInThread: z.boolean().openapi({
+                  description:
+                    "Asked in the main timeline, it answers in the thread under that message, as its channel said when it was asked (ADR 0214). `threadId` stays its conversation's root either way.",
+                }),
               }),
             ),
             consults: z
@@ -574,6 +579,14 @@ export function chatRoutes(deps: AppDeps) {
         query: z.object({
           threadId: z.uuid().optional(),
           before: z.iso.datetime().optional().openapi({ description: "Page backwards from this time." }),
+          after: z.iso
+            .datetime()
+            .optional()
+            .openapi({ description: "Page forwards from this time: the oldest `limit` after it." }),
+          around: z.uuid().optional().openapi({
+            description:
+              "The page with this top-level message in its middle (404 when it is deleted or not in this channel).",
+          }),
           limit: z.coerce.number().int().min(1).max(200).optional(),
           include: z
             .string()
@@ -589,6 +602,8 @@ export function chatRoutes(deps: AppDeps) {
       const messages = await listMessages(db, c.get("user").id, orgId, channelId, {
         threadId: q.threadId,
         before: q.before ? new Date(q.before) : undefined,
+        after: q.after ? new Date(q.after) : undefined,
+        around: q.around,
         limit: q.limit,
         includeReplies: q.include?.split(",").includes("replies") ?? false,
       });
@@ -643,6 +658,14 @@ export function chatRoutes(deps: AppDeps) {
               description:
                 "Sent while an agent works here (it goes into its task): stop its current model call and read this message now. Without it, the agent reads it at its next step.",
             }),
+            liveRef: z
+              .object({ artifactId: z.uuid(), selection: LiveSelection.optional() })
+              .nullable()
+              .optional()
+              .openapi({
+                description:
+                  "In a live file's conversation (ADR 0199): what you had selected in the file. Stored as `meta.liveRef` ({ artifactId, kind, title, selection? }) and shown as the message's `liveRef`. Only that conversation's own file (400 `message.live_ref`).",
+              }),
             clientId: z
               .string()
               .max(64)
@@ -742,11 +765,8 @@ export function chatRoutes(deps: AppDeps) {
     async (c) => {
       const { orgId, channelId } = c.req.valid("param");
       const userId = c.get("user").id;
-      const { workspace } = await requireChannelAccess(db, userId, orgId, channelId);
-      const followUps = await pendingReturns(db, userId, orgId, {
-        channelId,
-        managesAgents: can(workspace, "manage_agents"),
-      });
+      await requireChannelAccess(db, userId, orgId, channelId);
+      const followUps = await pendingReturns(db, userId, orgId, { channelId });
       return c.json({ followUps }, 200);
     },
   );

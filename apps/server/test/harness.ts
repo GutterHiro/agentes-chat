@@ -34,6 +34,7 @@ import {
   type EmailArt,
   type FakeScheduleAnswers,
   type FetchAppDocument,
+  type IntentWriter,
   type McpConnect,
   type ResolveHost,
   type ToolSource,
@@ -45,6 +46,7 @@ import { type AppleTokenRevoker, createAuth } from "../src/auth";
 import { buildEngine } from "../src/engine";
 import { createHumanCheck } from "../src/http/human-check";
 import { createLogger } from "../src/logger";
+import { createLiveSockets } from "../src/realtime/live";
 import { createMachineSockets } from "../src/realtime/machines";
 import { createStreamSockets } from "../src/realtime/streams";
 import { createRealtime, type SocketData } from "../src/realtime/ws";
@@ -81,6 +83,8 @@ export async function createTestServer(
     resolveHost?: ResolveHost;
     /** Fake GitHub (git smart HTTP and REST) for the git proxy. */
     github?: { gitUrl: string; apiUrl: string; fetch: typeof fetch };
+    /** The working line's first words at a run's start (`intent-line.ts`). Default: none. */
+    intents?: IntentWriter;
     /** Answers of the fake judge (judge.ts). Default: every Noul 0, but an agent's mention needs nothing. */
     judge?: Parameters<typeof createFakeJudge>[0];
     /** The fake schedule reader's table (phrase → answer), on top of `TEST_SCHEDULES`. */
@@ -124,9 +128,16 @@ export async function createTestServer(
      * password reset). Flipping `t.email.delivers` later reaches only the routes that read it on each request.
      */
     emailDelivers?: boolean;
+    /**
+     * `true`: new accounts keep the address they signed up with unconfirmed, as until its link is opened. By default a
+     * test's accounts start confirmed: on a server that sends email, one never confirmed makes no workspace (ADR 0006,
+     * addendum 2026-11-22), and most tests are about what comes after.
+     */
+    unconfirmedSignUps?: boolean;
   } = {},
 ) {
   const { db, close } = await createTestDatabase();
+  if (!options.unconfirmedSignUps) for (const statement of CONFIRMED_SIGN_UPS) await db.execute(sql.raw(statement));
   const config = testConfig({
     PUBLIC_URL: ORIGIN,
     AGENT_MAX_OUTPUT_TOKENS: "1000",
@@ -186,6 +197,7 @@ export async function createTestServer(
     github: options.github,
     judge: createFakeJudge(options.judge),
     schedules: createFakeScheduleReader({ ...TEST_SCHEDULES, ...options.schedules }),
+    intents: options.intents ?? null,
     toolsOnDemand: false,
     emailArt: options.emailArt,
     jevFetch: options.jevFetch,
@@ -229,6 +241,8 @@ export async function createTestServer(
       githubApp: engine.githubApp,
       speech: engine.speech,
       voice: engine.voice,
+      live: engine.live,
+      liveDeps: engine.liveDeps,
     },
     log,
   };
@@ -245,6 +259,16 @@ export async function createTestServer(
     services,
     log,
   });
+  const live = createLiveSockets({
+    db,
+    auth,
+    config,
+    pubsub: adapters.pubsub,
+    rateLimiter: adapters.rateLimiter,
+    docs: engine.live,
+    artifacts: engine.artifacts,
+    log,
+  });
   const realtime = createRealtime({
     db,
     auth,
@@ -254,12 +278,15 @@ export async function createTestServer(
     machines: createMachineSockets(engine.machineHub),
     browserLive: engine.browserLive,
     streams: createStreamSockets({ db, auth, config, broker: engine.streams }),
+    live,
   });
   return {
     db,
     close: async () => {
       await engine.machineHub.stop();
       engine.streams.stop();
+      live.stop();
+      await engine.live.stop();
       await close();
     },
     config,
@@ -336,6 +363,12 @@ export async function upgradeStatus(url: string, headers: Record<string, string>
 }
 
 /** Minimal browser over `app.request`: keeps cookies and sends our Origin. */
+/** Every new account starts with its address confirmed (`unconfirmedSignUps`). */
+const CONFIRMED_SIGN_UPS = [
+  "create function test_confirmed_sign_up() returns trigger language plpgsql as $$ begin new.email_verified := true; return new; end $$",
+  "create trigger test_confirmed_sign_up before insert on users for each row execute function test_confirmed_sign_up()",
+];
+
 export function browser(t: TestServer) {
   let cookie = "";
   const request = async (
@@ -508,6 +541,11 @@ export async function deletionsDue(t: TestServer) {
     .set({ nextAttemptAt: new Date(0) })
     .where(eq(schema.outbox.kind, "account.delete"));
   await t.drain();
+}
+
+/** The account at `email` as it is until its link is opened: the address never confirmed (`unconfirmedSignUps`). */
+export async function unconfirm(t: TestServer, email: string) {
+  await t.db.update(schema.users).set({ emailVerified: false }).where(eq(schema.users.email, email));
 }
 
 export async function signUp(b: Browser, email: string) {

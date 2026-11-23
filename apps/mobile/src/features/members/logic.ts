@@ -94,9 +94,22 @@ export function focusedFirst<R extends { id: string }>(requests: readonly R[], f
   return [...requests].sort((a, b) => (a.id === focus ? 0 : 1) - (b.id === focus ? 0 : 1));
 }
 
+/** One name order per language, made once: `localeCompare` with a language builds a collator on every comparison. */
+const nameOrders = new Map<string, Intl.Collator>();
+const nameOrder = (locale?: string): Intl.Collator => {
+  const key = locale ?? "";
+  let order = nameOrders.get(key);
+  if (!order) {
+    order = new Intl.Collator(locale, { sensitivity: "base" });
+    nameOrders.set(key, order);
+  }
+  return order;
+};
+
 /** The people of the workspace as Membros lists them: by name, in the person's language's order. */
 export function membersByName<M extends { name: string }>(members: readonly M[], locale?: string): M[] {
-  return [...members].sort((a, b) => a.name.localeCompare(b.name, locale, { sensitivity: "base" }));
+  const order = nameOrder(locale);
+  return [...members].sort((a, b) => order.compare(a.name, b.name));
 }
 
 /**
@@ -525,7 +538,7 @@ export function agentPicks(
   t: TFunction,
   args: {
     agents: readonly Agent[];
-    viewer: { userId: string; managesAgents: boolean };
+    viewer: { userId: string };
     roles: readonly OrgRole[];
     draft: Pick<InviteDraft, "roleIds" | "added" | "removed">;
     ownerName: (userId: string | null) => string | null;
@@ -541,7 +554,10 @@ export function agentPicks(
   const pick = (a: Agent): AgentPick => {
     const owners = args.mailboxOwners(a.id);
     const kind = inviteAgentCase(a, viewer, own, owners ?? []);
-    const owner = args.ownerName(a.ownerUserId);
+    // A role that answers for it is named as its owner (ADR 0085, addendum of 2026-11-21).
+    const owner = a.ownerRoleId
+      ? (roles.find((r) => r.id === a.ownerRoleId)?.name ?? null)
+      : args.ownerName(a.ownerUserId);
     const sub =
       kind === "everyone"
         ? a.role
@@ -579,11 +595,8 @@ export function agentPicks(
 }
 
 /** Whether Agentes asks whose mailboxes an agent holds: restricted, not a picked cargo's, and the viewer's to open. */
-export const asksMailboxes = (
-  a: Agent,
-  viewer: { userId: string; managesAgents: boolean },
-  cargoAgentIds: readonly string[],
-) => inviteAgentCase(a, viewer, cargoAgentIds) === "opens";
+export const asksMailboxes = (a: Agent, viewer: { userId: string }, cargoAgentIds: readonly string[]) =>
+  inviteAgentCase(a, viewer, cargoAgentIds) === "opens";
 
 /**
  * The lines under Agentes: a person who won't talk to agents (neither Todos nor a picked cargo lets them, the field
@@ -596,7 +609,7 @@ export function agentLines(
     roleIds: readonly string[];
     agents: readonly Agent[];
     agentIds: readonly string[];
-    viewer: { userId: string; managesAgents: boolean };
+    viewer: { userId: string };
   },
 ): { off: boolean; lines: string[] } {
   const everyone = everyoneOf(args.roles);

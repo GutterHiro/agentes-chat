@@ -22,10 +22,11 @@ export const channelVisibilityEnum = pgEnum("channel_visibility", ["public", "pr
 /**
  * `channel`: a named channel. `dm`: a direct conversation (person↔person or person↔agent), participants only.
  * `task`: a task's conversation (ADR 0145): read by whoever sees the task, never listed; only agents are members.
+ * `file`: a live file's conversation (ADR 0199): read by whoever reads the file, never listed; only agents are members.
  * `forum` is unused: the forum was removed (migration 0216), and Postgres drops an enum value only by recreating the
  * type, which would rewrite `channels` under a lock.
  */
-export const channelKindEnum = pgEnum("channel_kind", ["channel", "dm", "forum", "task"]);
+export const channelKindEnum = pgEnum("channel_kind", ["channel", "dm", "forum", "task", "file", "code"]);
 /** The kinds a channel has: no row is `forum` since migration 0216. */
 export type ChannelKind = Exclude<(typeof channelKindEnum.enumValues)[number], "forum">;
 
@@ -82,6 +83,11 @@ export const channels = pgTable(
     categoryId: uuid().references(() => channelCategories.id, { onDelete: "set null" }),
     /** Order inside its category (or among the channels with none), from 0. */
     position: integer().notNull().default(0),
+    /**
+     * Agents asked in the main timeline answer in the thread under the message that called them (ADR 0214). Regular
+     * channels only; each run keeps the value it was created with (`agent_runs.reply_in_thread`).
+     */
+    replyInThreads: boolean().notNull().default(false),
   },
   (t) => [unique().on(t.orgId, t.name), unique().on(t.orgId, t.id), unique().on(t.orgId, t.dmKey)],
 );

@@ -14,6 +14,7 @@ import {
   RadioGroup,
   Segmented,
   Switch,
+  windowAmount,
 } from "@agenteschat/ui";
 import {
   type CSSProperties,
@@ -51,14 +52,21 @@ export function PlanWindows({ usage, provider }: { usage: PlanUsage; provider?: 
       <div className="bd-wins">
         {rows.map((w, i) => {
           const name = text.window(w);
-          const renews = w.resetsAt && Date.parse(w.resetsAt) > now ? text.resets(w.resetsAt) : null;
+          const renews = w.resetsAt && Date.parse(w.resetsAt) > now && !w.stale ? text.resets(w.resetsAt) : null;
           return (
-            <div key={`${w.kind}:${w.label ?? i}`} className="bd-win" data-level={planLevel(w.used)}>
+            <div
+              key={`${w.kind}:${w.label ?? i}`}
+              className="bd-win"
+              data-level={w.stale ? "ok" : planLevel(w.used)}
+              data-stale={w.stale || undefined}
+            >
               <span className="bd-win__name">{name}</span>
-              <span className="bd-win__bar" aria-hidden="true">
-                <i style={{ "--used": `${Math.min(100, w.used)}%` } as CSSProperties} />
-              </span>
-              <span className="bd-win__n">{w.used}%</span>
+              {!w.stale && (
+                <span className="bd-win__bar" aria-hidden="true">
+                  <i style={{ "--used": `${Math.min(100, w.used)}%` } as CSSProperties} />
+                </span>
+              )}
+              <span className="bd-win__n">{windowAmount(usage, w, text)}</span>
               <small className="bd-win__at">{renews}</small>
             </div>
           );
@@ -71,8 +79,9 @@ export function PlanWindows({ usage, provider }: { usage: PlanUsage; provider?: 
 }
 
 /**
- * A setting on one line: its name, its value, and the way in (a chevron to its screen, or down for what opens under
- * it). Without `onOpen` it only says the value.
+ * A setting on one line, as a settings list draws it: its name at the start, its value at the end before the way in (a
+ * chevron to its screen, or down for what opens under it). Without `onOpen` it only says the value; without a value it
+ * is a way on (another AI, back to the workspace's), in the same row and on the same edges.
  */
 export function BrainLine({
   label,
@@ -83,9 +92,11 @@ export function BrainLine({
   opensDialog = false,
   open = false,
   controls,
+  disabled = false,
 }: {
   label: string;
-  value: ReactNode;
+  /** Said at the line's end, before its chevron; none for a line that only leads somewhere. */
+  value?: ReactNode;
   lead?: ReactNode;
   onOpen?: () => void;
   /** It opens under itself (`Fold`), not a screen of its own. */
@@ -95,6 +106,8 @@ export function BrainLine({
   open?: boolean;
   /** The fold it opens. */
   controls?: string;
+  /** Out of reach while something it changes is being saved. */
+  disabled?: boolean;
 }) {
   const body = (
     <>
@@ -110,6 +123,7 @@ export function BrainLine({
     <button
       type="button"
       className="bd-line"
+      disabled={disabled}
       onClick={onOpen}
       {...(folds
         ? { "aria-expanded": open, "aria-controls": controls }

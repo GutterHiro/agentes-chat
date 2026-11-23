@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   ACCOUNTS_PROTOCOL,
+  ANTIGRAVITY_MAC_PROTOCOL,
   BRAIN_PROTOCOL,
   CODEX_WINDOWS_PROTOCOL,
   CONTEXT_LIMIT_PROTOCOL,
@@ -8,7 +11,7 @@ import {
   OPENCODE_ACP_PROTOCOL,
   SPEED_PROTOCOL,
 } from "@agenteschat/adapters";
-import { eq, schema } from "@agenteschat/db";
+import { eq, migrationsFolder, schema, sql } from "@agenteschat/db";
 import { MODEL_CATALOG } from "@agenteschat/providers";
 import { CODING_PLANS, learnPlanModels, planOf } from "@agenteschat/providers/plans";
 import {
@@ -29,6 +32,7 @@ import {
   updateAgent,
   ValidationError,
 } from "../src";
+import { recordAudit } from "../src/audit";
 import {
   brainModelId,
   brainModelLabel,
@@ -60,7 +64,16 @@ const mac = (patch: Record<string, unknown> = {}) => ({
 
 describe("brain settings", () => {
   test("a coding plan's models: any of them by id, its aliases named after what they run there", () => {
-    expect(brainModelOptions("claude_code").map((o) => o.label)).toEqual(["Opus 5.5", "Sonnet 5.5", "Haiku 5.5"]);
+    expect(brainModelOptions("claude_code").map((o) => o.label)).toEqual([
+      "Fable 5.2",
+      "Opus 5.5",
+      "Sonnet 5.5",
+      "Haiku 5.5",
+    ]);
+    // Fable runs under Claude Code's own alias, and a full id is kept as its alias.
+    expect(normalizeBrainModel("claude_code", "fable")).toBe("fable");
+    expect(normalizeBrainModel("claude_code", "claude-fable-5-2")).toBe("fable");
+    expect(brainModelId("claude_code", "fable")).toBe("claude-fable-5-2");
     expect(brainModelOptions("codex").every((o) => o.modelId?.startsWith("gpt"))).toBe(true);
     // Codex offers the catalog's OpenAI rows, the Astras among them; the newest Sol is its default.
     expect(brainModelOptions("codex").map((o) => o.label)).toEqual([
@@ -78,6 +91,20 @@ describe("brain settings", () => {
       contextWindow: 1_050_000,
     });
     expect(normalizeBrainModel("codex", "gpt-6-astra")).toBe("gpt-6-astra");
+    // A plan runs its maker's models alone: another maker's is refused, not stored for runs that can't use it.
+    for (const [kind, model] of [
+      ["codex", "claude-opus-5-5"],
+      ["codex", "opus"],
+      ["codex", "gemini-4-argon"],
+      ["antigravity", "gpt-6.1"],
+      ["antigravity", "claude-sonnet-5-5"],
+      ["grok", "gpt-6-luna"],
+    ] as const)
+      expect(() => normalizeBrainModel(kind, model)).toThrow("doesn't run on");
+    expect(normalizeBrainModel("antigravity", "gemini-4-argon-high")).toBe("gemini-4-argon-high");
+    expect(normalizeBrainModel("grok", "grok-4.7")).toBe("grok-4.7");
+    expect(normalizeBrainModel("cursor", "claude-opus-5-5-high")).toBe("claude-opus-5-5-high");
+    expect(normalizeBrainModel("opencode", "anthropic/claude-opus-5-5")).toBe("anthropic/claude-opus-5-5");
     // An alias the plan leaves out, or "Automático", is its main model; the value stays an alias.
     expect(brainModelLabel("claude_code", "opus", "zai")).toBe("GLM-5.3");
     expect(brainModelLabel("claude_code", "auto", "minimax")).toBe("MiniMax M3.1 Flash");
@@ -163,8 +190,8 @@ describe("brain settings", () => {
           .slice(3)
           .map((o) => [o.kind, o.reason ?? null]),
       );
-    // An older Windows runner refuses every OpenCode turn; Cursor and Grok Build don't run on Windows; the Antigravity
-    // CLI only on Linux.
+    // An older Windows runner refuses every OpenCode turn; Cursor, Grok Build and the Antigravity CLI don't run on
+    // Windows; a Mac runner before `ANTIGRAVITY_MAC_PROTOCOL` refuses Gemini.
     expect(reasons(mac({ os: "windows", protocol: OPENCODE_ACP_PROTOCOL - 1, executors }))).toEqual({
       cursor: "system",
       opencode: "runner_old",
@@ -176,8 +203,9 @@ describe("brain settings", () => {
       cursor: null,
       opencode: null,
       grok: null,
-      antigravity: "system",
+      antigravity: "runner_old",
     });
+    expect(reasons(mac({ os: "darwin", protocol: ANTIGRAVITY_MAC_PROTOCOL, executors })).antigravity).toBeNull();
     expect(reasons(mac({ os: "linux", protocol: OPENCODE_ACP_PROTOCOL, executors }))).toEqual({
       cursor: null,
       opencode: null,
@@ -225,15 +253,13 @@ describe("brain settings", () => {
       ["claude_code", true, null],
       ["codex", false, "not_reported"],
     ]);
-    const oldCodex = mac({ executors: { codex: { version: "codex-cli 0.100.0" }, detectedAt: "x" } });
-    expect(reasons(oldCodex).slice(1, 3)).toEqual([
-      ["claude_code", false, "not_installed"],
-      ["codex", false, "outdated"],
-    ]);
-    expect(brainOptions(oldCodex).find((o) => o.kind === "codex")?.codexVersion).toEqual({
-      detected: "0.100.0",
-      minimum: "0.163.0",
-    });
+    // Codex counts at any version, whatever its line says.
+    for (const version of ["codex-cli 0.100.0", "codex-cli 0.170.0", ""]) {
+      expect(reasons(mac({ executors: { codex: { version }, detectedAt: "x" } })).slice(1, 3)).toEqual([
+        ["claude_code", false, "not_installed"],
+        ["codex", true, null],
+      ]);
+    }
     // There and failing to start: said as that, never "not installed".
     const broken = mac({ executors: { codex: { version: "0.170.0" }, broken: { claude: "boom" }, detectedAt: "x" } });
     expect(reasons(broken).slice(1, 3)).toEqual([
@@ -333,6 +359,41 @@ async function world() {
   };
   return { fx, deps: { db: fx.db }, machineId, bia, caio, account, row, audits, editor };
 }
+
+describe("a model its plan can't run, stored before the guard", () => {
+  test("goes back to the one it had before that change, else to its CLI's default", async () => {
+    const fx = await setup();
+    f = fx;
+    const migration = sql.raw(readFileSync(join(migrationsFolder, "0320_brain_model_of_its_plan.sql"), "utf8"));
+    const brainOf = async () => (await fx.db.select().from(schema.agents).where(eq(schema.agents.id, fx.agent.id)))[0];
+    await fx.db
+      .update(schema.agents)
+      .set({ brain: "codex", brainModel: "claude-opus-5-5" })
+      .where(eq(schema.agents.id, fx.agent.id));
+    await recordAudit(fx.db, {
+      orgId: fx.org.id,
+      actor: { type: "person", id: fx.owner.id },
+      action: "agent.brain",
+      target: { type: "agent", id: fx.agent.id },
+      details: { from: { brain: "codex", model: "gpt-6-luna" }, to: { brain: "codex", model: "claude-opus-5-5" } },
+    });
+    await fx.db.execute(migration);
+    expect((await brainOf())?.brainModel).toBe("gpt-6-luna");
+    await fx.db
+      .update(schema.agents)
+      .set({ brain: "antigravity", brainModel: "gpt-6.1" })
+      .where(eq(schema.agents.id, fx.agent.id));
+    await fx.db.execute(migration);
+    expect((await brainOf())?.brainModel).toBeNull();
+    // Cursor runs every maker's models: left as it is.
+    await fx.db
+      .update(schema.agents)
+      .set({ brain: "cursor", brainModel: "claude-opus-5-5-high" })
+      .where(eq(schema.agents.id, fx.agent.id));
+    await fx.db.execute(migration);
+    expect((await brainOf())?.brainModel).toBe("claude-opus-5-5-high");
+  });
+});
 
 describe("Criar agente: what a new agent could think with", () => {
   test("admins see every computer with what it offers; a member the server's own and theirs, never someone else's", async () => {

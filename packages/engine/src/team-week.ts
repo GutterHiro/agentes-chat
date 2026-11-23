@@ -16,6 +16,7 @@ import {
 import { modelForTier, modelInfo } from "@agenteschat/providers";
 import { listApprovals } from "./approvals";
 import { DIGEST_FROM, digestWaitingOn } from "./approvals-digest";
+import { ownsAgentSql } from "./audience";
 import { editContextItem, howToSql } from "./context/items";
 import { LEARN_DEFAULTS } from "./context/learn";
 import {
@@ -566,7 +567,10 @@ async function suggestedLately(db: Database, w: Window): Promise<Set<string>> {
 /** The model one size down from a large one, for the brain it thinks with. Null: not large, or nothing in between. */
 function smallerModel(a: TeamAgent): { from: string; to: string } | null {
   // Claude Code names its models by size.
-  if (a.brain === "claude_code") return a.brain_model === "opus" ? { from: "opus", to: "sonnet" } : null;
+  if (a.brain === "claude_code") {
+    const to = a.brain_model === "fable" ? "opus" : a.brain_model === "opus" ? "sonnet" : null;
+    return to && a.brain_model ? { from: a.brain_model, to } : null;
+  }
   const info = a.brain === "model" ? modelInfo(a.model) : undefined;
   if (info?.tier !== "large") return null;
   const to = modelForTier(info.provider, "medium");
@@ -780,7 +784,7 @@ export async function buildTeamDay(
                 then (r.transcript->'waitingForBrain'->>'since')::numeric end,
               extract(epoch from r.updated_at) * 1000) <= ${w.end.getTime() - HELD_MS}))
         and ((c.kind = 'channel' and c.visibility = 'public') or ${channelReaderSql(sql`c.id`, user)})
-        and (exists (select 1 from agents oa where oa.id = r.agent_id and oa.owner_user_id = ${w.userId})
+        and (exists (select 1 from agents oa where oa.id = r.agent_id and ${ownsAgentSql("oa", sql`${w.userId}::text`)})
           or ${theirAsk})
       order by ${ended} desc limit ${DAY_RUNS}`),
   );
@@ -1121,7 +1125,8 @@ async function provenHowTos(db: Database, w: Window): Promise<TeamWeekRow[]> {
     .where(
       and(
         eq(contextItems.orgId, w.orgId),
-        eq(agents.ownerUserId, w.userId),
+        // The agents they answer for: theirs, or one whose owner role they hold (ADR 0085, addendum of 2026-11-21).
+        ownsAgentSql("agents", sql`${w.userId}::text`),
         isNull(agents.archivedAt),
         eq(contextItems.status, "active"),
         isNull(contextItems.supersededBy),

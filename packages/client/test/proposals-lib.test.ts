@@ -110,6 +110,16 @@ describe("a name and a look on a settings card", () => {
     expect(line.from).toBe("rightHand.value.lookDefault");
     expect(line.to).toBe("#123456 · look.eyesNames.happy · look.accessories.crown");
   });
+  test("an effort reads as its level; none as the model's own, auto as Automático", () => {
+    expect(settingLineText(t, "pt-BR", { field: "effort", from: null, to: "xhigh" }, names)).toEqual({
+      field: "rightHand.field.effort",
+      from: "agentPage.work.brain.efforts.none",
+      to: "agentPage.work.brain.efforts.high",
+    });
+    expect(settingLineText(t, "pt-BR", { field: "effort", from: "auto", to: "low" }, names).from).toBe(
+      "agentPage.work.brain.efforts.auto",
+    );
+  });
   test("Responde a reads the agents' names the server gave, or none", () => {
     expect(
       settingLineText(
@@ -145,7 +155,7 @@ describe("a name and a look on a settings card", () => {
 
 describe("a skill line on a settings card", () => {
   const names = { model: (id: string) => id, person: () => undefined, channel: () => undefined, role: () => undefined };
-  test("reads as the skill by its name, off to on, and only admins change it, as on the agent's page", () => {
+  test("reads as the skill by its name, off to on, and only whoever can edit the agent changes it, as on its page", () => {
     expect(
       settingLineText(
         t,
@@ -160,7 +170,8 @@ describe("a skill line on a settings card", () => {
     });
     const key = onlyKey({ settings: [{ field: "skill", skillId: "s-excel", from: true, to: false }] });
     expect(key).toBe("rightHand.card.only.skill");
-    expect(en.rightHand.card.only.skill).toBe("Only admins change an agent's skills");
+    // Its owner, who manages it and the people its "Who can edit" names (ADR 0085 addendum of 2026-11-17).
+    expect(en.rightHand.card.only.skill).toBe("Only whoever can edit an agent changes its skills");
   });
 });
 

@@ -8,6 +8,15 @@ export const cutText = (text: string, max: number) => text.slice(0, max).replace
 /** `cutText` for text people read: a cut ends in "…", never passing for the whole. */
 export const cutMarked = (text: string, max: number) => (text.length > max ? `${cutText(text, max - 1)}…` : text);
 
+/** A sentence's words as they compare: lower case, no accents, no punctuation or emoji, single spaces. */
+export const plainWords = (s: string) =>
+  s
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+
 /** "Ana's", for the English the agents read. */
 export const possessive = (name: string) => `${name}'s`;
 
@@ -45,6 +54,19 @@ export function wordCount(text: string) {
 }
 
 /** `cutText` from the end: the last `max` units, never half of a pair at the start. */
+/**
+ * `text` without the characters `strip` takes at its ends (`"end"`: only at its end), read by index. Not by a pattern
+ * like `/^-+|-+$/g`: titles, names and paths come from people and programs, and such a pattern reads each run that
+ * doesn't reach the end again from each of its characters, quadratic in the run's length.
+ */
+export function trimEdges(text: string, strip: (c: string) => boolean, edges: "both" | "end" = "both"): string {
+  let start = 0;
+  let end = text.length;
+  if (edges === "both") while (start < end && strip(text.charAt(start))) start++;
+  while (end > start && strip(text.charAt(end - 1))) end--;
+  return text.slice(start, end);
+}
+
 export const cutTextEnd = (text: string, max: number) =>
   text.slice(Math.max(0, text.length - max)).replace(/^[\uDC00-\uDFFF]/, "");
 
@@ -55,6 +77,24 @@ export const stringsOf = (value: unknown): string[] =>
 /** `value` when it is a whole number from `min` to `max`, else null: a stored hour or weekday that may hold anything. */
 export const wholeIn = (value: unknown, min: number, max: number): number | null =>
   typeof value === "number" && Number.isInteger(value) && value >= min && value <= max ? value : null;
+
+/** A JSON object, never an array: what Postgres's `jsonb_typeof` calls `object`. */
+export const isJsonObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** What sits at a dot path in a JSON value (`conversation.id`, `items.0.id`), else undefined. */
+export const valueAtPath = (value: unknown, path: string) =>
+  path
+    .split(".")
+    .reduce<unknown>((v, k) => (v && typeof v === "object" ? (v as Record<string, unknown>)[k] : undefined), value);
+
+/** `value` when it is a finite number from `min` to `max`, else null: a stored measure that may hold anything. */
+export const numberIn = (value: unknown, min: number, max: number): number | null =>
+  typeof value === "number" && Number.isFinite(value) && value >= min && value <= max ? value : null;
+
+/** A measure the database worked out, to the nearest whole; null where it measured nothing. */
+export const wholeOrNull = (value: unknown): number | null =>
+  value === null || value === undefined ? null : Math.round(Number(value));
 
 /** Postgres text and jsonb refuse NUL and lone UTF-16 surrogates: `text` without either. */
 export const pgSafeText = (text: string) =>
@@ -96,6 +136,15 @@ export function textOfBytes(bytes: Uint8Array): string | null {
     // ponytail: control-byte share as the binary test; magic bytes would catch a NUL-free binary that passes it.
     return control > bytes.length / 20 ? null : new TextDecoder("windows-1252").decode(bytes);
   }
+}
+
+/** A moment as m:ss (h:mm:ss past an hour). */
+export function clockOf(seconds: number): string {
+  const s = Math.floor(seconds);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = String(s % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
 }
 
 /** `2.3 MB`, `12 KB`, `512 bytes`, `50.0 GB`: sizes in the English agents read. */

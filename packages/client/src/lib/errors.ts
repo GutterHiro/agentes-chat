@@ -20,6 +20,11 @@ export const REAUTH_PASSWORD = "reauth.password";
  * takes `untranslatedText`; a guard test (`error-words.test.ts`) fails on a new code that isn't here or on its list.
  */
 const KNOWN = {
+  // Moving a plan to another workspace (ADR 0079).
+  "plan_move.not_payer": "errors.planMove.notPayer",
+  "plan_move.same": "errors.planMove.same",
+  "plan_move.target_has_plan": "errors.planMove.targetHasPlan",
+  "plan_move.target_deleting": "errors.planMove.targetDeleting",
   // Linking an outside chat surface (ADR 0187). The lines name no surface: the server's errors carry no name.
   "surface.off": "errors.surface.off",
   "surface.not_allowed": "errors.surface.notAllowed",
@@ -53,6 +58,9 @@ const KNOWN = {
   "agent.not_owner": "errors.agent.ownerOrAdmin",
   "usage_queue.cancel_forbidden": "errors.agent.ownerOrAdmin",
   "agent.details_hidden": "errors.agent.detailsHidden",
+  // Who answers for an agent (ADR 0085, addendum of 2026-11-21): a person or a role, never both.
+  "agent.owner_both": "errors.agent.ownerBoth",
+  "agent.owner_role_unknown": "errors.agent.ownerRoleUnknown",
   "action.not_allowed": "errors.agent.undoForbidden",
   "action.skills_admins": "errors.agent.undoSkillsAdmins",
   "account.not_owner": "errors.account.notOwner",
@@ -86,16 +94,45 @@ const KNOWN = {
   "artifact.sharing_empty": "errors.artifact.sharingEmpty",
   "artifact.sharing_too_many": "errors.artifact.sharingTooMany",
   "artifact.not_in_drive": "errors.artifact.notInDrive",
+  "drive.folder_into_itself": "errors.drive.folderIntoItself",
+  // Who edits (ADR 0202): a change from someone whose access lets them only view the file, an access that doesn't read.
+  "artifact.view_only": "errors.artifact.viewOnly",
+  "artifact.access_invalid": "errors.artifact.accessInvalid",
+  // Live files (ADR 0196): a change to a file that is read-only now (in the trash, its workspace closing), a picture
+  // over the size a file takes or that is no picture, a file past what it may hold, a whole new content sent for one
+  // (it changes only in place).
+  "live.read_only": "errors.live.readOnly",
+  "live.too_large": "errors.live.tooLarge",
+  "live.asset_too_large": "errors.live.assetTooLarge",
+  "live.asset_type": "errors.live.assetType",
+  "artifact.live_only": "errors.live.liveOnly",
+  // Uploaded Office files (ADR 0198): damaged, past what the server reads, of a kind only downloaded, locked with a
+  // password, or past what a live file holds.
+  "office.unreadable": "errors.office.unreadable",
+  "office.too_large": "errors.office.tooLarge",
+  "office.unsupported": "errors.office.unsupported",
+  "office.encrypted": "errors.office.encrypted",
+  "office.too_large_to_edit": "errors.office.tooLargeToEdit",
+  // Images made on a canvas (ADR 0197).
+  "images.no_model": "errors.images.noModel",
+  "images.model_unavailable": "errors.images.modelUnavailable",
+  "images.reference": "errors.images.reference",
+  "images.not_canvas": "errors.images.notCanvas",
+  "images.rate": "errors.images.rate",
+  person_limit: "errors.images.personLimit",
+  provider_error: "errors.images.provider",
   "machine.forbidden": "errors.machine.forbidden",
   "device.forbidden": "errors.machine.forbidden",
   "device.link_not_found": "errors.machine.pairingInvalid",
   "device.not_link_maker": "errors.device.notLinkMaker",
   "device.widen_forbidden": "errors.device.widenForbidden",
   "device.spill_owner_only": "errors.device.spillOwnerOnly",
+  "device.tasks_owner_only": "errors.device.tasksOwnerOnly",
   "device.not_home": "errors.device.notHome",
   "machine.not_found": "errors.machine.notFound",
   "machine.name_required": "errors.machine.nameRequired",
   "account.method_unsupported": "errors.machine.accountMethodUnsupported",
+  "brain.unavailable": "errors.machine.brainUnavailable",
   "machine.pairing_invalid": "errors.machine.pairingInvalid",
   "machine.pairing_off": "errors.machine.pairingOff",
   "machine.target_offline": "errors.machine.targetOffline",
@@ -136,6 +173,19 @@ const KNOWN = {
   "mission.agent_unavailable": "errors.mission.agentUnavailable",
   "mission.no_computer": "errors.mission.noComputer",
   "mission.computer_offline": "errors.mission.computerOffline",
+  // A code session (ADR 0215): starting one, and what its panel reads on the agent's computer.
+  "code_session.too_long": "errors.said.tooLong",
+  "code_session.bad_repo": "errors.webhook.invalidRepo",
+  "code_session.offline": "errors.mission.computerOffline",
+  "code_session.no_computer": "errors.codeSession.noComputer",
+  "code_session.cannot_code": "errors.codeSession.cannotCode",
+  "code_session.repo_not_allowed": "errors.codeSession.repoNotAllowed",
+  "code_session.not_yours": "errors.codeSession.notYours",
+  "code_session.not_ready": "errors.codeSession.notReady",
+  "code_session.file_changed": "errors.codeSession.fileChanged",
+  "code_session.file_locked": "errors.codeSession.fileLocked",
+  "code_session.suggestion_gone": "errors.codeSession.suggestionGone",
+  "code_session.suggestion_not_yours": "errors.codeSession.suggestionNotYours",
   "mission.exec_disabled": "errors.mission.execDisabled",
   "mission.runner_outdated": "errors.mission.runnerOutdated",
   "mission.codex_windows": "errors.mission.codexWindows",
@@ -177,6 +227,7 @@ const KNOWN = {
   "routine.widget_fixed": "errors.routine.widgetFixed",
   "routine.agent_not_in_channel": "errors.routine.agentNotInChannel",
   "routine.webhook_paused": "errors.routine.webhookPaused",
+  "routine.group_by_invalid": "errors.routine.groupByInvalid",
   "routine.continue_extra_off": "errors.routine.continueExtraOff",
   "run.continue_extra_off": "errors.routine.continueExtraOff",
   "routine.continue_extra_used_up": "errors.routine.continueExtraUsedUp",
@@ -217,6 +268,9 @@ const KNOWN = {
   "connector.headers_too_many": "errors.connector.headersTooMany",
   "connector.headers_with_sign_in": "errors.connector.headersWithSignIn",
   "connector.headers_unreadable": "errors.connector.headersUnreadable",
+  "connector.no_oauth": "errors.connector.noOAuth",
+  "connector.oauth_client_in_use": "errors.connector.ownClientInUse",
+  "connector.oauth_client_id": "errors.connector.ownClientId",
   // Facts only (the phone shows this one): the web's onboarding says `standing.createUnpaid` beside the way to pay.
   "org.create_unpaid": "standing.createInactive",
   "credentials.plan_hold": "connectAi.key.closed",
@@ -254,6 +308,7 @@ const KNOWN = {
   "email.undo_taken": "emailUndo.takenLead",
   "invitation.ask_to_join": "errors.invitation.askToJoin",
   "org.create_invite_only": "errors.org.createInviteOnly",
+  "org.create_unconfirmed": "errors.org.createUnconfirmed",
   "org.not_restorable": "errors.org.notRestorable",
   "account.not_restorable": "errors.account.notRestorable",
   "issue.assignee_outside": "errors.issue.assigneeOutside",
@@ -527,7 +582,7 @@ const KNOWN = {
   "database.url": "errors.said.checkAddress",
   "url.credentials": "errors.said.checkAddress",
   "url.https_required": "errors.said.checkAddress",
-  "url.internal": "errors.said.checkAddress",
+  "url.internal": "errors.said.privateNetwork",
   "url.invalid": "errors.said.checkAddress",
   "url.not_found": "errors.said.checkAddress",
   "database.too_long": "errors.said.tooLong",
@@ -567,6 +622,7 @@ const KNOWN = {
   "join.waiting": "errors.said.alreadyAsked",
   "mail.already_connected": "errors.said.mailboxConnected",
   "mail.send_without_asking_needs_recipients": "errors.said.sendNeedsRecipients",
+  "mission.executor_unavailable": "errors.mission.executorUnavailable",
   "mission.tasks_live": "errors.said.missionLive",
   "org.create_refused": "errors.said.createRefused",
   "reminder.no_agent": "errors.said.noAgentToRemind",
@@ -916,6 +972,18 @@ function readsEnglish(t: TFunction) {
 export const forbiddenText = (t: TFunction, error: ApiError, locale?: string): string =>
   knownErrorText(t, error, locale) ?? t("common.notAllowed");
 
+/** A password sign-in past its account's tries (apps/server auth.ts `TOO_MANY_PASSWORD_TRIES`). */
+export const TOO_MANY_PASSWORD_TRIES = "TOO_MANY_PASSWORD_TRIES";
+
+/**
+ * Too many password tries on this account: when to try again, in whole minutes from the refusal's `retryIn` (its
+ * `Retry-After`, in seconds). Null for any other refusal.
+ */
+export function passwordTriesText(t: TFunction, refusal: { code?: string | null; retryIn?: number }): string | null {
+  if (refusal.code !== TOO_MANY_PASSWORD_TRIES) return null;
+  return t("auth.passwordTries", { count: Math.max(1, Math.ceil((refusal.retryIn ?? 15 * 60) / 60)) });
+}
+
 /**
  * A sign-in, sign-up or reset Better Auth refused (`{ status, code, message }`, a block's kind on agentes.chat Cloud)
  * in the person's words: too many tries, a blocked account and the bot check by their codes, no answer (status 0, or
@@ -923,8 +991,10 @@ export const forbiddenText = (t: TFunction, error: ApiError, locale?: string): s
  */
 export function authErrorText(
   t: TFunction,
-  refusal: { status: number; code?: string; message: string } & RestrictionFacts,
+  refusal: { status: number; code?: string; message: string; retryIn?: number } & RestrictionFacts,
 ): string {
+  const tries = passwordTriesText(t, refusal);
+  if (tries) return tries;
   if (refusal.status === 429) return t("auth.tooManyTries");
   if (refusal.status === 0) return noAnswerText(t);
   const { kind, cloud } = refusal;

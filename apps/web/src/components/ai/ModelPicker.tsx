@@ -9,6 +9,7 @@ import {
   usePlatformKey,
   useUpdateAgent,
 } from "@agenteschat/client";
+import { managesAgent } from "@agenteschat/client/lib/audience";
 import { type EffortLevel, effortLevelsOf, effortOf, effortTextOf } from "@agenteschat/client/lib/brain-advanced";
 import {
   mayPickModel,
@@ -19,30 +20,38 @@ import {
   type PickerBefore,
   type PickerModel,
 } from "@agenteschat/client/lib/brain-picker";
+import type { PlanChoice } from "@agenteschat/client/lib/no-ai";
 import { can } from "@agenteschat/client/lib/permissions";
 import { modelStandInKey, planMeterText } from "@agenteschat/client/lib/plan-usage";
-import { planOf } from "@agenteschat/client/lib/plans";
+import { brainMissingHint, planOf } from "@agenteschat/client/lib/plans";
 import { modelChoices } from "@agenteschat/client/lib/providers";
 import { isRightHand } from "@agenteschat/client/lib/right-hand";
 import {
   BrainIcon,
   Button,
   cx,
+  Dialog,
   EffortPixels,
   EventPill,
   EventPillAction,
   Icon,
   Input,
-  Popover,
+  Menu,
+  MenuItem,
+  MenuRadioGroup,
+  MenuSeparator,
   ProviderLogo,
   planLine,
+  Segmented,
+  Skeleton,
+  SkeletonGroup,
 } from "@agenteschat/ui";
 import { useQueryClient } from "@tanstack/react-query";
-import { type CSSProperties, type ReactElement, useState } from "react";
+import { type CSSProperties, cloneElement, type ReactElement, type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useOpenAgentPanel } from "@/components/agent-panel-context";
 import { TeamScene } from "@/components/arrival/TeamScene";
-import { useConnectAi } from "@/components/ConnectAi";
+import { useConnectAi } from "@/components/connect-ai-context";
 import { useOrg } from "@/components/org-context";
 import { useAgentThinks } from "@/hooks/useAgentThinks";
 import { fullLook, lookOf } from "@/lib/look";
@@ -56,24 +65,28 @@ const SEARCH_FROM = 8;
 /**
  * The agent's AI and model, changed in place (a DM's header, its profile card, its side panel): a button saying what
  * it thinks with, opening the picker under the agent's sky. Whoever can't change it (not an admin, not its owner)
- * reads the same words, with nothing to press.
+ * reads the same words, with nothing to press. `status`: a code session's status line under its composer (ADR 0215),
+ * quiet words with `after` (its plan's limits) in them, a plate only under the pointer.
  */
 export function ModelPickerButton({
   agent,
   size = "sm",
   className,
+  after,
 }: {
   agent: Agent;
-  size?: "sm" | "row";
+  size?: "sm" | "row" | "status";
   className?: string;
+  /** In it after the model, on a `status` line. */
+  after?: ReactNode;
 }) {
   const { t } = useTranslation();
-  const { org, me } = useOrg();
+  const { me } = useOrg();
   const thinks = useAgentThinks(agent);
   if (!thinks?.text) return null;
   const mark = thinks.mark ? <ProviderLogo id={thinks.mark} size="xs" /> : <BrainIcon kind={thinks.kind} size={14} />;
   // The team's right hand thinks with each person's own AI ("Sua IA"), set where that is: never picked here.
-  if (!mayPickModel(agent, me.user.id, can(org, "manage_agents")))
+  if (!mayPickModel(agent, me.user.id, managesAgent(agent)))
     return (
       <span
         className={cx("mp-label", className)}
@@ -82,6 +95,7 @@ export function ModelPickerButton({
       >
         {mark}
         <span className="mp-label__text">{thinks.text}</span>
+        {size === "status" && after}
       </span>
     );
   return (
@@ -97,6 +111,7 @@ export function ModelPickerButton({
         >
           {mark}
           <span className="mp-label__text">{thinks.text}</span>
+          {size === "status" && after}
           <Icon name="chevronDown" size={14} className="mp-trigger__chevron" />
         </button>
       )}
@@ -104,22 +119,41 @@ export function ModelPickerButton({
   );
 }
 
-/** The picker, opened from `trigger` (the header's button, a reply's "Escolher modelo"). */
+/**
+ * The picker, opened from `trigger` (the header's button, a reply's "Escolher modelo"): a dialog of its own, the
+ * agent's sky at its top with the way out over it.
+ */
 function ModelPickerPopover({ agent, trigger }: { agent: Agent; trigger: (open: boolean) => ReactElement }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   return (
-    <Popover
-      open={open}
-      onOpenChange={setOpen}
-      side="bottom"
-      align="end"
-      label={t("brain.picker.open", { agent: agent.name })}
-      className="mp"
-      trigger={trigger(open)}
-    >
-      {open && <ModelPickerPanel agent={agent} onClose={() => setOpen(false)} />}
-    </Popover>
+    <>
+      {cloneElement(trigger(open) as ReactElement<{ onClick?: () => void; "aria-haspopup"?: string }>, {
+        onClick: () => setOpen(true),
+        "aria-haspopup": "dialog",
+      })}
+      <Dialog
+        open={open}
+        onOpenChange={setOpen}
+        title={t("brain.picker.open", { agent: agent.name })}
+        closeLabel={t("common.close")}
+        width={440}
+        bare
+        className="mp"
+      >
+        <Button
+          size="sm"
+          variant="ghost"
+          iconOnly
+          icon="close"
+          className="mp__close"
+          aria-label={t("common.close")}
+          title={t("common.close")}
+          onClick={() => setOpen(false)}
+        />
+        {open && <ModelPickerPanel agent={agent} onClose={() => setOpen(false)} />}
+      </Dialog>
+    </>
   );
 }
 
@@ -139,7 +173,7 @@ export function ModelStandInLine({
 }) {
   const { t } = useTranslation();
   const { org, me } = useOrg();
-  const may = mayPickModel(agent, me.user.id, can(org, "manage_agents"));
+  const may = mayPickModel(agent, me.user.id, managesAgent(agent));
   const key = may ? modelStandInKey(meta) : null;
   const ai = useAiAccounts(org.id, Boolean(key));
   const account = key
@@ -178,8 +212,24 @@ export function ModelStandInLine({
 }
 
 function ModelPickerPanel({ agent, onClose }: { agent: Agent; onClose: () => void }) {
+  const { t } = useTranslation();
   const brain = useAgentBrain(useOrg().org.id, agent.id);
-  if (!brain.data) return <div className="mp__loading" aria-busy="true" />;
+  // Still reading what the agent thinks with: its sky already, and the picker's own shape under it.
+  if (!brain.data)
+    return (
+      <div className="mp__body mp__loading" aria-busy="true">
+        <TeamScene className="mp__sky" agents={[{ id: agent.id, name: agent.name }]} lead={agent.id} />
+        <SkeletonGroup label={t("common.loading")}>
+          <Skeleton shape="block" width={212} height={40} />
+          <Skeleton shape="block" width={180} height={36} />
+          <Skeleton width={140} />
+          {[150, 96, 104, 110].map((w) => (
+            <Skeleton key={w} width={w} height={18} />
+          ))}
+          <Skeleton shape="block" width="100%" height={72} />
+        </SkeletonGroup>
+      </div>
+    );
   return <PickerBody agent={agent} view={brain.data} onClose={onClose} />;
 }
 
@@ -197,12 +247,23 @@ function PickerBody({ agent, view, onClose }: { agent: Agent; view: AgentBrain; 
   const platform = usePlatformKey(org.id);
   const all = models.data?.models ?? [];
   const choices = modelChoices(all, credentials.data ?? view.keys ?? [], platform.data ?? false);
-  const tiles = modelPickerTiles(t, view, agent.ownerUserId, choices, agent.model, all);
+  // The computer's own sign-ins as its runner reported them: a plan's tile offers one only where it is signed in.
+  const aiAccounts = useAiAccounts(org.id);
+  const computerRow = aiAccounts.data?.computers.find((c) => c.machineId === view.computer?.machineId);
+  const tiles = modelPickerTiles(t, view, agent.ownerUserId, choices, agent.model, all, computerRow);
   const [tileKey, setTileKey] = useState(() => (tiles.find((x) => x.current) ?? tiles[0])?.key);
   const tile = tiles.find((x) => x.key === tileKey) ?? tiles[0];
   const [accountId, setAccountId] = useState<string | null | undefined>(undefined);
   const account = tile?.accounts.find((a) => a.id === accountId) ?? tile?.accounts[0];
   const rows = tile ? modelPickerModels(t, i18n.language, view, tile, account, choices, agent.model) : [];
+  // Gemini's newest model missing from the computer's list: why, under the list.
+  const missing =
+    tile && tile.kind !== "model" && !planOf(account?.provider)
+      ? brainMissingHint(
+          t,
+          view.options.find((o) => o.kind === tile.kind),
+        )
+      : undefined;
   const [q, setQ] = useState("");
   const shown = q.trim() ? rows.filter((r) => r.label.toLowerCase().includes(q.trim().toLowerCase())) : rows;
   const [busy, setBusy] = useState(false);
@@ -281,58 +342,88 @@ function PickerBody({ agent, view, onClose }: { agent: Agent; view: AgentBrain; 
           </>
         )}
       </TeamScene>
+      {/* The AIs as the kit's segmented control, each by its maker's bare mark (its name is the line under it), and
+          connecting another beside it. */}
       <div className="mp__tiles">
-        {tiles.map((x) => (
-          <button
-            key={x.key}
-            type="button"
-            className="mp__tile"
-            aria-pressed={x.key === tile?.key}
-            aria-label={x.name}
-            title={x.name}
-            onClick={() => {
-              setTileKey(x.key);
+        {tile && (
+          <Segmented
+            size="sm"
+            className="mp__ais"
+            label={t("brain.picker.ais")}
+            value={tile.key}
+            onValueChange={(key) => {
+              setTileKey(key);
               setAccountId(undefined);
               setQ("");
             }}
-          >
-            <ProviderLogo id={x.mark} size="sm" />
-          </button>
-        ))}
+            options={tiles.map((x) => ({
+              value: x.key,
+              label: <ProviderLogo id={x.mark} size="xs" label={x.name} />,
+              title: x.name,
+            }))}
+          />
+        )}
         {connect && (
-          <button
-            type="button"
-            className="mp__tile mp__tile--add"
+          <Button
+            size="sm"
+            variant="ghost"
+            icon="plus"
+            iconOnly
             aria-label={t("brain.picker.connect")}
             title={t("brain.picker.connect")}
             onClick={() => {
               onClose();
               connect.open({ agentId: agent.id, chat: true });
             }}
-          >
-            <Icon name="plus" size={16} />
-          </button>
+          />
         )}
       </div>
       {tile && (
         <div className="mp__head">
-          <div className="mp__who">
-            <b>{tile.name}</b>
-            {tile.accounts.length > 1 ? (
-              <select
-                className="mp__account"
-                aria-label={t("brain.picker.account")}
-                value={account?.id ?? ""}
-                onChange={(e) => setAccountId(e.target.value || null)}
+          {/* The AI and the account it thinks on as one control, the kit's split (as the git button): its name, then
+              its account, which opens the others and connecting one more. */}
+          <div className="ac-split mp__who">
+            <span className="mp__ai">
+              <ProviderLogo id={tile.mark} size="xs" />
+              {tile.name}
+            </span>
+            {account && (
+              <Menu
+                label={t("brain.picker.account")}
+                trigger={
+                  <Button
+                    size="sm"
+                    className="mp__account"
+                    aria-label={t("brain.picker.accountOf", { account: account.label })}
+                  >
+                    <span className="mp__account-name">{account.label}</span>
+                    <Icon name="chevronDown" size={14} />
+                  </Button>
+                }
               >
-                {tile.accounts.map((a) => (
-                  <option key={a.id ?? "own"} value={a.id ?? ""}>
-                    {a.label}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              account && <span className="mp__plan">{account.label}</span>
+                <MenuRadioGroup
+                  label={t("brain.picker.account")}
+                  value={account.id ?? ""}
+                  onValueChange={(v) => setAccountId(v || null)}
+                  options={tile.accounts.map((a) => ({ value: a.id ?? "", label: a.label }))}
+                />
+                {connect && (
+                  <>
+                    <MenuSeparator />
+                    <MenuItem
+                      icon="plus"
+                      onSelect={() => {
+                        onClose();
+                        // Another account of this plan: its own sign-in steps, not the generic choice.
+                        const plan = tile.kind === "model" ? undefined : (tile.key as PlanChoice);
+                        connect.open({ agentId: agent.id, chat: true, ...(plan ? { plan, start: plan } : {}) });
+                      }}
+                    >
+                      {t("brain.picker.connectAccount")}
+                    </MenuItem>
+                  </>
+                )}
+              </Menu>
             )}
           </div>
           {meter?.line && (
@@ -377,6 +468,7 @@ function PickerBody({ agent, view, onClose }: { agent: Agent; view: AgentBrain; 
           </button>
         ))}
       </div>
+      {missing && <p className="mp__missing">{missing}</p>}
       {effortOn && tile && (
         <div className="mp__effort">
           <EffortPixels

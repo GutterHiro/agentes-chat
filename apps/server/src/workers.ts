@@ -3,9 +3,11 @@ import { type Database, ensureMessagePartitions, schema } from "@agenteschat/db"
 import {
   type ArtifactDeps,
   type BrowserLive,
+  type ConnectorDeps,
   type ContextDeps,
   claimStuckPhoneSetups,
   clearOldOutboxPayloads,
+  consolidateRunAt,
   createOutboxPump,
   type DesktopControl,
   enqueue,
@@ -17,6 +19,7 @@ import {
   enqueueRightHandChecks,
   enqueueSkillUpdates,
   enqueueVaultSyncs,
+  enqueueWaitingResets,
   enqueueWaitlistContacts,
   expireAgentProposalAsks,
   expireApprovals,
@@ -38,6 +41,7 @@ import {
   type MailDeps,
   type OutboxJob,
   pollMailWatches,
+  pollTelegramBots,
   postAutonomyDigests,
   pruneConfidential,
   pruneDeletionCodes,
@@ -50,6 +54,7 @@ import {
   purgeApps,
   purgeDeletedArtifacts,
   purgeDeletedWikiPages,
+  purgeTelegramUpdates,
   queueApprovalDigests,
   reapRoutineRuns,
   recheckStuckPlans,
@@ -57,6 +62,7 @@ import {
   reconcileComposioConnectors,
   reconcileWorks,
   recoverStaleRuns,
+  refreshNativeTokens,
   refreshPlanModels,
   releaseJobs,
   sweepEndedInboxes,
@@ -130,6 +136,8 @@ export interface WorkerDeps {
   approvalDigest?: { publicUrl: string; afterHours: number };
   /** People's mailboxes (ADR 0038): IMAP polling for routines, and Composio account checks. */
   mail?: { deps: MailDeps; pollSeconds: number };
+  /** Connectors of our own (ADR 0170): Telegram bots without a webhook are polled. */
+  connectors?: ConnectorDeps;
   /** The agent browser's live view (ADR 0040): expired handoffs are told to its viewers. */
   browserLive?: BrowserLive;
   /** Connected computers: plans stuck at their limit are read again there (`recheckStuckPlans`). */
@@ -187,6 +195,12 @@ export const WORKER_INTERVALS_MS = {
   confidentialPrune: 24 * 3600_000,
   /** How often watched IMAP folders are looked at (each is checked every `MAIL_POLL_SECONDS`). */
   mailPoll: 30_000,
+  /** Telegram bots on a server the internet doesn't reach: `getUpdates` (ADR 0170 §5). */
+  telegramPoll: 30_000,
+  /** Long-lived tokens of our own connectors renewed before they end (Threads). */
+  connectorTokens: 12 * 3600_000,
+  /** What Telegram bots heard past 30 days. */
+  telegramPurge: 6 * 3600_000,
   /** Composio accounts' state: mailboxes (expired → "Reconnect") and connectors marked to reconnect (working again → active). */
   mailReconcile: 15 * 60_000,
   /** Workspaces past their deletion's date that nothing keeps any more (a hold lifted, a job lost): also at boot. */
@@ -348,8 +362,9 @@ export function startWorkers(deps: WorkerDeps) {
     await pruneEmailChanges(db);
     const accounts = await enqueueOverdueAccountDeletions(db);
     const due = await enqueueOverdueDeletions(db);
-    if (due + accounts > 0) {
-      log.info("workspace deletions due", { due, accounts });
+    const resets = await enqueueWaitingResets(db);
+    if (due + accounts + resets > 0) {
+      log.info("workspace deletions due", { due, accounts, resets });
       void ticks.get("outbox")?.();
     }
   });
@@ -418,6 +433,22 @@ export function startWorkers(deps: WorkerDeps) {
       if (swept > 0) log.info("feedback files past their time swept", { files: swept });
     });
   }
+
+  const connectors = deps.connectors;
+  if (connectors) {
+    every("telegramPoll", WORKER_INTERVALS_MS.telegramPoll, async () => {
+      const fired = await pollTelegramBots(connectors);
+      if (fired > 0) void ticks.get("outbox")?.();
+    });
+  }
+  if (connectors) {
+    // Threads' 60-day tokens no call renewed in time (ADR 0170 §3).
+    every("connectorTokens", WORKER_INTERVALS_MS.connectorTokens, async () => {
+      const renewed = await refreshNativeTokens(connectors);
+      if (renewed > 0) log.info("connector tokens renewed", { renewed });
+    });
+  }
+  every("telegramPurge", WORKER_INTERVALS_MS.telegramPurge, () => purgeTelegramUpdates(db));
 
   every("wikiPurge", WORKER_INTERVALS_MS.wikiPurge, async () => {
     const purged = await purgeDeletedWikiPages(db);
@@ -504,15 +535,18 @@ export function startWorkers(deps: WorkerDeps) {
       const queued = await enqueueIdleReflections(context);
       if (queued > 0) log.info("idle threads queued for reflection", { queued });
     });
-    // One consolidation job per organization per day (dedupe key = org + date: replicas don't double it).
+    // One consolidation job per organization per day (dedupe key = org + date: replicas don't double it), spread
+    // over hours: they share the long lane with agent runs.
     every("consolidation", WORKER_INTERVALS_MS.consolidation, async () => {
-      const day = new Date().toISOString().slice(0, 10);
+      const now = new Date();
+      const day = now.toISOString().slice(0, 10);
       for (const org of await db.select({ id: schema.organizations.id }).from(schema.organizations)) {
         await enqueue(db, {
           orgId: org.id,
           kind: "context.consolidate",
           payload: {},
           dedupeKey: `context.consolidate:${org.id}:${day}`,
+          runAt: consolidateRunAt(org.id, now),
         });
       }
     });

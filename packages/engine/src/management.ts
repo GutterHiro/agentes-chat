@@ -4,9 +4,10 @@ import { MODEL_TIERS, type ModelTier } from "@agenteschat/providers";
 import { othersPersonalTools } from "./agent-audit";
 import { getAgent } from "./agents";
 import { decidableBySql } from "./approvals";
-import { audienceSql, listsAllAgents } from "./audience";
+import { listsAgentSql, managesAgent, ownsAgent } from "./audience";
 import { recordAudit } from "./audit";
 import type { AutoModels } from "./auto-model";
+import { resolveDefaultBudgetPaused } from "./budget-paused-rows";
 import { caches } from "./cache";
 import {
   announceChannelLeavers,
@@ -17,11 +18,11 @@ import {
   placesAgentsIn,
   readableChannelIds,
 } from "./channels";
+import { hasCodeWork } from "./code-sessions";
 import { proposalsWaitingFor } from "./context/proposals";
 import { invalidateDefaults, modelInfoFor } from "./credentials";
 import { ConflictError, ForbiddenError, isUniqueViolation, NotFoundError, ValidationError } from "./errors";
 import { publishChannelEvent, publishChannelsChanged } from "./events";
-import { agentBudgetState } from "./gateway";
 import {
   AGENT_MEDIA_LEVELS,
   type AgentMediaLevel,
@@ -33,8 +34,10 @@ import {
 } from "./media";
 import { can, lockOrgMembers, requireActiveMembership, requirePermission } from "./organizations";
 import { isRightHand, rightHandPermanent } from "./right-hand";
+import type { AccountSwitch } from "./spill";
 import { type ApprovalsLevel, DEFAULT_APPROVALS_LEVEL } from "./tools/run-policy";
 import {
+  agentBudgetState,
   agentBudgetsThisMonth,
   budgetPercent,
   DEFAULT_AGENT_BUDGET_NANO_USD,
@@ -276,9 +279,13 @@ export async function updateOrgSettings(
     }
   });
   caches.orgs.delete(`${orgId}:`);
+  caches.membership.deletePrefix(`${orgId}:`);
   caches.orgs.delete(`${orgId}:agent-budget`);
   // Agents on the default budget whose runs wait for it look again now (the rest park again quietly).
-  if (input.defaultAgentBudgetNanoUsd !== undefined) await resumeBudgetWaits(db, orgId, null);
+  if (input.defaultAgentBudgetNanoUsd !== undefined) {
+    await resumeBudgetWaits(db, orgId, null);
+    await resolveDefaultBudgetPaused({ db }, orgId);
+  }
   caches.orgs.delete(`${orgId}:action-check`);
   caches.orgs.delete(`${orgId}:auto-models`);
   caches.orgs.delete(mediaSettingsCacheKey(orgId));
@@ -306,7 +313,10 @@ function mergeAutoModels(
   return out;
 }
 
-/** Counts for the sidebar: people, agents, the workspace's budget use, approvals and proposals waiting for me. */
+/**
+ * Counts for the sidebar: people, agents, the workspace's budget use, approvals and proposals waiting for me; and
+ * whether Code has anything for me (ADR 0215 §12).
+ */
 export async function orgOverview(db: Database, actorId: string, orgId: string, now = new Date()) {
   const membership = await requirePermission(db, actorId, orgId, "read");
   const [people] = await db
@@ -316,13 +326,13 @@ export async function orgOverview(db: Database, actorId: string, orgId: string, 
   const [agentCount] = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(agents)
-    // The agents the person's lists name (`listsAgentTo`), the right hand (ADR 0137) included: the sidebar lists it
-    // under this count with the others.
+    // The agents the person's lists name (`listsAgentTo`, the ones they edit included), the right hand (ADR 0137)
+    // included: the sidebar lists it under this count with the others.
     .where(
       and(
         eq(agents.orgId, orgId),
         isNull(agents.archivedAt),
-        listsAllAgents(membership) ? undefined : audienceSql("agents", sql`${actorId}::text`),
+        listsAgentSql("agents", sql`${actorId}::text`, membership),
       ),
     );
   const [pending] = await db
@@ -338,6 +348,7 @@ export async function orgOverview(db: Database, actorId: string, orgId: string, 
     budgetUsedPercent: await workspaceBudgetPercent(db, orgId, now),
     approvalsWaitingForMe: pending?.n ?? 0,
     proposalsWaitingForMe: await proposalsWaitingFor(db, actorId, orgId),
+    code: await hasCodeWork(db, actorId, orgId),
   };
 }
 
@@ -351,8 +362,8 @@ export async function agentDetail(db: Database, actorId: string, orgId: string, 
   const since = monthStartUtc(now);
   const [usage] = await db
     .select({
-      // What its budget paid: its own calls, as `agentBudgetsThisMonth` counts them.
-      cost: sql<string>`coalesce(sum(${usageRecords.costNanoUsd}) filter (where ${usageRecords.kind} = 'agent'), 0)`,
+      // What its budget paid: its own calls and pictures, as `agentBudgetsThisMonth` counts them.
+      cost: sql<string>`coalesce(sum(${usageRecords.costNanoUsd}) filter (where ${usageRecords.kind} in ('agent', 'image')), 0)`,
       tokens: sql<string>`coalesce(sum(${usageRecords.inputTokens} + ${usageRecords.outputTokens} + ${usageRecords.cacheReadTokens} + ${usageRecords.cacheWriteTokens}), 0)`,
     })
     .from(usageRecords)
@@ -398,7 +409,7 @@ export async function agentDetail(db: Database, actorId: string, orgId: string, 
 
 export async function listAgentChannels(db: Database, actorId: string, orgId: string, agentId: string) {
   const membership = await requireActiveMembership(db, actorId, orgId);
-  const [rows, ownChannels] = await Promise.all([
+  const [rows, ownChannels, agent] = await Promise.all([
     db
       .select({
         id: channels.id,
@@ -415,9 +426,11 @@ export async function listAgentChannels(db: Database, actorId: string, orgId: st
       .select({ channelId: channelMembers.channelId })
       .from(channelMembers)
       .where(and(eq(channelMembers.orgId, orgId), eq(channelMembers.userId, actorId))),
+    getAgent(db, orgId, agentId),
   ]);
   const visible = new Set(ownChannels.map((row) => row.channelId));
-  const admin = can(membership, "manage_agents");
+  // Its private channels show to who manages this agent (ADR 0085 addendum of 2026-11-17), who may take it out of them.
+  const admin = !!agent && managesAgent(agent, actorId, membership);
   return rows
     .filter((row) => visible.has(row.id) || (row.kind === "channel" && (row.visibility === "public" || admin)))
     .map(({ id, name, autoReply }) => ({ id, name, autoReply }));
@@ -425,10 +438,10 @@ export async function listAgentChannels(db: Database, actorId: string, orgId: st
 
 /**
  * Sets where an agent works: the channels it belongs to and, per channel, whether the router may pick it without a
- * mention. Its owner or who may manage every agent (`manage_agents`) sets it, and puts it in or takes it out of a
- * channel only where they're a member who may post, or that they manage (`placesAgentsIn`, the rule a channel's
- * members follow too). The list replaces the channels `listAgentChannels` shows them: a private channel they can't
- * see, a DM or an archived channel stays as it is.
+ * mention. Its owner or who manages it (`managesAgent`, ADR 0085 addendum of 2026-11-17) sets it, and puts it in or
+ * takes it out of a channel only where they're a member who may post, or that they manage (`placesAgentsIn`, the rule
+ * a channel's members follow too). The list replaces the channels `listAgentChannels` shows them: a private channel
+ * they can't see, a DM or an archived channel stays as it is.
  */
 export async function setAgentChannels(
   db: Database,
@@ -441,8 +454,8 @@ export async function setAgentChannels(
   const membership = await requireActiveMembership(db, actorId, orgId);
   const agent = await getAgent(db, orgId, agentId);
   if (!agent || agent.archivedAt) throw new NotFoundError("Agent not found");
-  const admin = can(membership, "manage_agents");
-  if (!admin && agent.ownerUserId !== actorId) {
+  const admin = managesAgent(agent, actorId, membership);
+  if (!admin && !ownsAgent(agent, actorId, membership.roleIds)) {
     throw new ForbiddenError("Only an admin or the agent's owner can change where it works");
   }
   if (input.length > 0 && isRightHand(agent)) throw rightHandPermanent("added to a channel");
@@ -475,6 +488,20 @@ export async function setAgentChannels(
   const inIt = new Set(current.map((c) => c.id));
   const adding = found.filter((c) => !inIt.has(c.id));
   if (adding.some((c) => c.kind === "dm")) throw new ValidationError("A direct conversation keeps its participants");
+  // An agent joins a live file's conversation only when it may work on the file (`admitFileAgents`, ADR 0199 §2).
+  if (adding.some((c) => c.kind === "file")) {
+    throw new ValidationError(
+      "An agent joins a file's conversation when someone there names it",
+      "channel.file_conversation",
+    );
+  }
+  // And a task's only through a mention there (ADR 0145, `admitTaskAgents`).
+  if (adding.some((c) => c.kind === "task")) {
+    throw new ValidationError(
+      "An agent joins a task's conversation when someone there names it",
+      "channel.task_conversation",
+    );
+  }
   const actorIn = new Set(mine.map((c) => c.id));
   const removing = current.filter(
     (c) => c.kind === "channel" && !wanted.has(c.id) && (actorIn.has(c.id) || c.visibility === "public" || admin),
@@ -543,14 +570,21 @@ export async function setAgentChannels(
 /**
  * Renames a channel or changes its topic or who may join (creator or admin). `audienceRoleIds` limits a private
  * channel to departments or roles (ADR 0125; empty: invite only); dropping a role takes out the people who were
- * there through it alone.
+ * there through it alone. `replyInThreads`: agents asked in its main timeline answer in the thread under that
+ * message (ADR 0214); runs already going stay where they are.
  */
 export async function updateChannel(
   db: Database,
   actorId: string,
   orgId: string,
   channelId: string,
-  input: { name?: string; topic?: string; visibility?: "public" | "private"; audienceRoleIds?: string[] },
+  input: {
+    name?: string;
+    topic?: string;
+    visibility?: "public" | "private";
+    audienceRoleIds?: string[];
+    replyInThreads?: boolean;
+  },
   options: { pubsub?: PubSub } = {},
 ) {
   const membership = await requireActiveMembership(db, actorId, orgId);
@@ -568,6 +602,8 @@ export async function updateChannel(
   if (channel.name === "general" && name !== undefined && name !== "general")
     throw new ValidationError("#general can't be renamed");
   if (channel.kind === "dm") throw new ValidationError("A direct conversation keeps its participants");
+  if (input.replyInThreads !== undefined && channel.kind !== "channel")
+    throw new ValidationError("Only a channel can reply in threads", "channel.reply_in_threads");
   const accessChanges = input.visibility !== undefined || input.audienceRoleIds !== undefined;
   const visibility = input.visibility ?? channel.visibility;
   const asked =
@@ -597,6 +633,7 @@ export async function updateChannel(
         .set({
           ...(name !== undefined ? { name } : {}),
           ...(input.topic !== undefined ? { topic: input.topic } : {}),
+          ...(input.replyInThreads !== undefined ? { replyInThreads: input.replyInThreads } : {}),
           ...access,
         })
         .where(eq(channels.id, channelId))
@@ -643,7 +680,7 @@ export async function requireUsageAccess(db: Database, actorId: string, orgId: s
   if (can(membership, "view_usage")) return;
   if (agentId) {
     const agent = await getAgent(db, orgId, agentId);
-    if (agent?.ownerUserId === actorId) return;
+    if (agent && ownsAgent(agent, actorId, membership.roleIds)) return;
   }
   throw new ForbiddenError();
 }
@@ -678,6 +715,8 @@ export interface RunSummary {
   repo: string | null;
   /** A GitHub repository it was refused (not in the agent's list), if any. */
   deniedRepo: string | null;
+  /** It went on with another account than its agent's own (`Transcript.accountSwitch`), if it did. */
+  accountSwitch: AccountSwitch | null;
 }
 
 /** Run history, newest first, with tokens and cost from the usage records of each run. */
@@ -709,6 +748,7 @@ export async function listRuns(
       deniedRepo: sql<
         string | null
       >`case when jsonb_typeof(${t}->'deniedRepo') = 'string' then ${t}->>'deniedRepo' end`,
+      accountSwitch: sql<AccountSwitch | null>`${t}->'accountSwitch'`,
     })
     .from(agentRuns)
     .where(
@@ -785,6 +825,7 @@ export async function listRuns(
       finishedAt: r.finishedAt,
       repo: r.repo,
       deniedRepo: r.deniedRepo,
+      accountSwitch: r.accountSwitch ?? null,
     };
   });
 }
@@ -832,7 +873,7 @@ export async function getRun(db: Database, actorId: string, orgId: string, runId
 
 /**
  * Usage of the organization since `since` (default: this month): totals by
- * kind (agent, router, embedding, summary) and per agent with budgets.
+ * kind (agent, router, embedding, summary, image) and per agent with budgets.
  */
 export async function usageReport(db: Database, actorId: string, orgId: string, options: { since?: Date } = {}) {
   await requirePermission(db, actorId, orgId, "view_usage");

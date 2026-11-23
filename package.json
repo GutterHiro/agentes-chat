@@ -32,8 +32,10 @@
     "eval:behavior": "bun --env-file=.env packages/engine/eval/behavior.ts",
     "eval:resilience": "bun --env-file=.env packages/engine/eval/resilience.ts",
     "eval:mentions": "bun --env-file=.env packages/engine/eval/mention-handoff.ts",
+    "eval:turn-end": "bun --env-file=.env packages/engine/eval/turn-end.ts",
     "eval:catchup": "bun --env-file=.env packages/engine/eval/catch-up.ts",
     "eval:router": "bun --env-file=.env packages/engine/eval/router.ts",
+    "eval:steer": "bun --env-file=.env packages/engine/eval/steer-triage.ts",
     "eval:turns": "bun --env-file=.env packages/engine/eval/turns-real.ts",
     "eval:conversation": "bun --env-file=.env packages/engine/eval/conversation.ts",
     "eval:browser": "bun --env-file=.env packages/engine/eval/browser/ab.ts",
@@ -48,7 +50,9 @@
     "typescript": "^7.0.2"
   },
   "patchedDependencies": {
-    "react-native-screens@4.30.0": "patches/react-native-screens@4.30.0.patch"
+    "react-native-screens@4.30.0": "patches/react-native-screens@4.30.0.patch",
+    "@legendapp/list@3.7.3": "patches/@legendapp%2Flist@3.7.3.patch",
+    "react-native-pdf-light@3.2.1": "patches/react-native-pdf-light@3.2.1.patch"
   },
   "packageManager": "bun@1.4.4",
   "license": "AGPL-3.0-only"

@@ -79,7 +79,8 @@ export function DmPage({ target, focusMessageId }: { target: DmTarget; focusMess
   }
   if (!dm.data || dir.loading) return <ChannelSkeleton dm={kind} />;
 
-  const owner = agent?.ownerUserId ? dir.memberById.get(agent.ownerUserId) : undefined;
+  // A person's name or, when a role answers for it, the role's (ADR 0085, addendum of 2026-11-21).
+  const owner = agent ? dir.ownerName(agent) : undefined;
   const role = agent ? agent.role || `@${agent.handle}` : "";
   // The right hand (ADR 0137) says what it is and whose permissions it acts with, never an owner, nor a model: each
   // person's DM with it thinks with their own AI, shown with its maker's logo in the side panel's Como pensa.
@@ -87,7 +88,7 @@ export function DmPage({ target, focusMessageId }: { target: DmTarget; focusMess
     ? rightHand
       ? `${t("rightHand.label")} · ${t("rightHand.actsAsYou")}`
       : owner
-        ? t("dm.subtitle", { role, owner: owner.name })
+        ? t("dm.subtitle", { role, owner })
         : t("dm.subtitleNoOwner", { role })
     : undefined;
   const header = ({
@@ -126,9 +127,10 @@ export function DmPage({ target, focusMessageId }: { target: DmTarget; focusMess
           {/* Its tasks (ADR 0128), while it has any: they open in the side panel. */}
           {agent && <AgentTasksPill />}
           {/* The sidebar has the computer: only a line of turns waiting for it still shows here. A viewer of its public
-              card gets the sidebar's head alone, so the way in stays for one who may still watch the computer. */}
+              card gets the sidebar's head alone, so the way in stays for one who may still watch the computer. The
+              right hand's AI is each person's own ("Sua IA" in the sidebar), so its header has no model button. */}
           {agent && !rightHand && <ModelPickerButton agent={agent} className="channel__brain" />}
-          {agent && !rightHand && <ComputerButton agent={agent} queueOnly={side?.docked && seesDetails(agent)} />}
+          {agent && <ComputerButton agent={agent} queueOnly={side?.docked && seesDetails(agent)} />}
           {/* The same field as a channel's, held to this DM. */}
           <HeaderSearch channelId={dm.data.channelId} onOpen={onSearch} searching={searching} dm />
           {/* Its own list, as its right click elsewhere, with this conversation's background. */}

@@ -31,7 +31,8 @@ import "./request-card.css";
 
 /**
  * What an agent can ask of a person in the conversation: each says so in the card's header and in the bar.
- * "proposal": a change to the workspace's context or an agent's instructions; "agent": a new agent.
+ * "proposal": a change to the workspace's context or an agent's instructions; "agent": a new agent; "code": a code
+ * session for a change asked in the chat (ADR 0215 §11).
  */
 export type RequestKind =
   | "approval"
@@ -42,7 +43,8 @@ export type RequestKind =
   | "proposal"
   | "agent"
   | "team"
-  | "firstTask";
+  | "firstTask"
+  | "code";
 
 /**
  * A request waiting for the viewer, as its card registers it: the bar above the composer says it. `runId`: the run that
@@ -183,7 +185,7 @@ const SETTLE_MS = 220;
  * sits in the same place: a quiet header (what kind of request, and who else it waits for), the agent's own
  * words, what will happen drawn edge to edge (its preview, as an attachment's cover), the object on a line of its own between
  * hairlines with "Ver …" under its words opening it whole, anything to fill in, and the footer strip with the decision on
- * the left and the time left on the right. One surface: nothing inside has a background of its own.
+ * the left and the time left ending its line, or under it from the same edge when there's no room. One surface: nothing inside has a background of its own.
  *
  * Decided (`answer`), it is the same card: the header, the words and the object stay where they were, and the footer
  * strip says how it ended, who did it and when, in the buttons' place.
@@ -334,9 +336,9 @@ export function RequestCard({
     </div>
   ) : (
     (actions || end) && (
-      <div className="rq__foot">
+      <div className="rq__foot ac-tailrow">
         {actions}
-        {end && <span className="rq__end">{end}</span>}
+        {end && <span className="rq__end ac-tail">{end}</span>}
         {under && <span className="rq__under">{under}</span>}
       </div>
     )

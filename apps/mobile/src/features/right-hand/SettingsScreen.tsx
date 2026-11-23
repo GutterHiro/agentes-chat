@@ -19,7 +19,7 @@ import {
 } from "@agenteschat/client";
 import { selfHosted } from "@agenteschat/client/lib/about";
 import { accountChoices, accountTitle, ownSignInTitle } from "@agenteschat/client/lib/ai-accounts";
-import { agentsReach, audienceOf, audiencePatch } from "@agenteschat/client/lib/audience";
+import { agentsReach, audienceOf, audiencePatch, managesAgent } from "@agenteschat/client/lib/audience";
 import { modelRows } from "@agenteschat/client/lib/brain-picker";
 import { agentGrammar } from "@agenteschat/client/lib/grammar";
 import { readBudget } from "@agenteschat/client/lib/new-agent";
@@ -27,7 +27,13 @@ import { rightHandUnusable } from "@agenteschat/client/lib/no-ai";
 import { can } from "@agenteschat/client/lib/permissions";
 import { brainPlan } from "@agenteschat/client/lib/plans";
 import { AUTO } from "@agenteschat/client/lib/providers";
-import { mineStatus, RIGHT_HAND_POWERS, rightHandNoComputer, rightHandOf } from "@agenteschat/client/lib/right-hand";
+import {
+  mineStatus,
+  RIGHT_HAND_POWERS,
+  rightHandComputerLine,
+  rightHandNoComputer,
+  rightHandOf,
+} from "@agenteschat/client/lib/right-hand";
 import { type LodiPrefsPatch, type LodiSwitch, teamWeekOn } from "@agenteschat/client/lib/right-hand-prefs";
 import { helpUrl } from "@agenteschat/client/lib/server";
 import { dayText, hourText } from "@agenteschat/client/lib/team-week";
@@ -76,7 +82,6 @@ export const openRightHandSettings = () => router.push("/settings/right-hand" as
  */
 export function RightHandSettingsScreen() {
   const { t } = useTranslation();
-  const { org } = useOrg();
   const agent = rightHandOf(useDirectory().agents);
   if (!agent)
     return (
@@ -93,9 +98,9 @@ export function RightHandSettingsScreen() {
       <RightHandMine agent={agent} />
       <RightHandApprovalsGroup />
       <OwnRows name={agent.name} />
-      {can(org, "manage_agents") ? (
+      {managesAgent(agent) ? (
         <>
-          {/* Who sees the group, after its name: only who manages agents. */}
+          {/* Who sees the group, after its name: only who manages it (the server's `canManage`). */}
           <SectionHeader title={`${t("rightHand.settings.groupWorkspace")} · ${t("rightHand.settings.groupAdmins")}`} />
           <Form agent={agent} />
         </>
@@ -117,7 +122,7 @@ export function RightHandSettingsScreen() {
 /**
  * "Computador": the row opens the computer every agent's profile opens, which for the right hand is the viewer's own
  * seat on the workspace's computer and nobody else's. Where it has none for anyone (the workspace has no computer of
- * its own, or one that can't keep people apart) the row stays and says why, with nothing to open.
+ * its own) the row stays and says why, with nothing to open.
  */
 function Computer({ agentId }: { agentId: string }) {
   const { t, i18n } = useTranslation();
@@ -167,7 +172,7 @@ function Computer({ agentId }: { agentId: string }) {
             }}
           />
         ) : (
-          t(none ?? "rightHand.computerYours")
+          t(none ?? rightHandComputerLine(view.machine))
         )}
       </GroupedFooter>
     </>

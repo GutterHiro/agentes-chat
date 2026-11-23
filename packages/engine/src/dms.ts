@@ -1,7 +1,7 @@
 import type { PubSub } from "@agenteschat/adapters";
 import { and, type Database, desc, type Executor, eq, inArray, isNull, ne, schema, sql } from "@agenteschat/db";
 import type { Agent } from "./agents";
-import { audienceError, canTalkTo, speakerOf } from "./audience";
+import { audienceError, canTalkTo, managesAgent, speakerOf } from "./audience";
 import { caches } from "./cache";
 import { wordsOf } from "./confidential";
 import { sha256 } from "./crypto";
@@ -12,7 +12,7 @@ import { landedAfterSql } from "./message-place";
 import { type PreviewMeta, previewMediaKind, previewMeta, readableBody } from "./message-preview";
 import { quietNoticeSql } from "./notices";
 import { resolveNotifications, unaskedGroup } from "./notifications";
-import { can, getMembership, requirePermission } from "./organizations";
+import { getMembership, requirePermission } from "./organizations";
 import { accountInUse, closedRefusal } from "./standing";
 
 const { channels, channelMembers, channelReads, messages, agents, users, organizationMembers } = schema;
@@ -123,8 +123,10 @@ export async function openDm(
       .from(agents)
       .where(and(eq(agents.id, target.agentId), eq(agents.orgId, orgId), isNull(agents.archivedAt)));
     if (!agent) throw new NotFoundError("Agent not found");
-    // Who manages agents opens it anyway (its composer says why it won't answer and offers to let them in).
-    if (!canTalkTo(agent, actorId, speakerOf(membership)) && !can(membership, "manage_agents")) blockedAgent = agent;
+    // Who manages the agent opens it anyway (its composer says why it won't answer and offers to let them in); a
+    // private agent stays closed to who merely holds "Editar qualquer agente" (ADR 0085 addendum of 2026-11-17).
+    if (!canTalkTo(agent, actorId, speakerOf(membership)) && !managesAgent(agent, actorId, membership))
+      blockedAgent = agent;
     other = `a:${target.agentId}`;
   }
   const dmKey = keyOf([`u:${actorId}`, other]);
@@ -234,6 +236,15 @@ export const agentDmKey = (a: string, b: string) => keyOf([`a:${a}`, `a:${b}`]);
 /** A DM between agents only: no person reads it, so nobody there can answer a question. */
 export const isAgentOnlyDm = (channel: { kind: string; dmKey: string | null }) =>
   channel.kind === "dm" && channel.dmKey !== null && !channel.dmKey.includes("u:");
+
+/** The run's conversation is a DM between agents only (`isAgentOnlyDm`). */
+export async function inAgentOnlyDm(ctx: { db: Executor; orgId: string; channelId: string }) {
+  const [channel] = await ctx.db
+    .select({ kind: schema.channels.kind, dmKey: schema.channels.dmKey })
+    .from(schema.channels)
+    .where(and(eq(schema.channels.orgId, ctx.orgId), eq(schema.channels.id, ctx.channelId)));
+  return Boolean(channel && isAgentOnlyDm(channel));
+}
 
 /**
  * Opens the private conversation between two agents (creates it the first

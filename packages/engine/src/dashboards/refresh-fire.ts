@@ -26,8 +26,10 @@ export interface WidgetRunWait extends WidgetWaitView {
   runId: string;
   waitId: string | null;
   orgId: string;
+  agentId: string;
   triggerMessageId: string;
   ownerUserId: string | null;
+  ownerRoleId: string | null;
   routineId: string;
   routineCreatorId: string | null;
 }
@@ -50,8 +52,10 @@ export async function widgetRunWaits(db: Executor, routineIds: readonly string[]
       routineCreatorId: routines.createdByUserId,
       runId: agentRuns.id,
       orgId: agentRuns.orgId,
+      agentId: agentRuns.agentId,
       triggerMessageId: agentRuns.triggerMessageId,
       ownerUserId: agents.ownerUserId,
+      ownerRoleId: agents.ownerRoleId,
       status: agentRuns.status,
       machineId: agentRuns.waitingMachineId,
       code: wait("code"),
@@ -105,8 +109,10 @@ export async function widgetRunWaits(db: Executor, routineIds: readonly string[]
         runId: r.runId,
         waitId: r.waitId,
         orgId: r.orgId,
+        agentId: r.agentId,
         triggerMessageId: r.triggerMessageId,
         ownerUserId: r.ownerUserId,
+        ownerRoleId: r.ownerRoleId,
         routineId: r.routineId,
         routineCreatorId: r.routineCreatorId,
       });
@@ -117,10 +123,11 @@ export async function widgetRunWaits(db: Executor, routineIds: readonly string[]
 /** Whether `userId` may press Continue now on a widget's paused refresh: Continuar agora's people (`mayContinuePause`). */
 export const mayContinueWidgetWait = (db: Executor, userId: string, membership: Membership, wait: WidgetRunWait) =>
   mayContinuePause(db, userId, membership, {
-    run: { orgId: wait.orgId, triggerMessageId: wait.triggerMessageId },
+    run: { orgId: wait.orgId, agentId: wait.agentId, triggerMessageId: wait.triggerMessageId },
     // A routine's run is asked by its brief, its creator's: `mayStopRun` reads that message itself.
     requester: null,
     ownerUserId: wait.ownerUserId,
+    ownerRoleId: wait.ownerRoleId,
     routineId: wait.routineId,
     routineCreatorId: wait.routineCreatorId,
   });

@@ -18,11 +18,13 @@ import {
   ApiError,
   applyBrowserHandoff,
   applyChannelEvent,
+  applyCodeSessionEvent,
   applyComputerEvent,
   applyConsultEvent,
   applyConversationEvent,
   applyDashboardEvent,
   applyIssueEvent,
+  applyLiveEvent,
   applyMachineEvent,
   applyMembershipEvent,
   applyNotificationEvent,
@@ -42,6 +44,7 @@ import {
   cacheAgentProposal,
   cacheApproval,
   cacheCardDelegate,
+  cacheCodeSuggestion,
   cacheDmRead,
   cacheMessage,
   cacheMessageActions,
@@ -49,6 +52,7 @@ import {
   cacheMessageWork,
   cachePinned,
   cacheReceipts,
+  cacheResolved,
   cacheTask,
   cacheTeamCard,
   catchUpChannel,
@@ -483,6 +487,8 @@ export function RealtimeProvider({
       }
       // A proposal I may decide: the sidebar's count and Aprovações' tab.
       if (event.type === "proposal.created") void refreshProposals(qc, orgId);
+      // A code session I'm in changed (ADR 0215): its worktree, name or pull request.
+      applyCodeSessionEvent(qc, orgId, event);
       // Unread marks: a message where I am, and my reads and mutes from any device.
       applyUnreadEvent(qc, orgId, event);
       // My inbox: new or merged items, auto-resolved ones, and the badge's numbers.
@@ -805,6 +811,8 @@ export function useChannelRealtime(orgId: string, channelId: string, enabled: bo
       }
       // A file's cards and viewer, an agent's memory list.
       applyConversationEvent(qc, orgId, event);
+      // Who is in one of the conversation's live files changed (ADR 0196 §5): its cards ask again.
+      applyLiveEvent(qc, orgId, event);
       if (event.type === "poll.updated") qc.setQueryData(keys.poll(orgId, event.poll.id), event.poll);
       if (event.type === "block.state") {
         const { block } = event;
@@ -854,6 +862,14 @@ export function useChannelRealtime(orgId: string, channelId: string, enabled: bo
       if (event.type === "message.pinned" || event.type === "message.unpinned") {
         cachePinned(qc, orgId, channelId, event.messageId, event.type === "message.pinned");
         void qc.invalidateQueries({ queryKey: keys.pins(orgId, channelId) });
+      }
+      // A comment on a picture, a video or a PDF was resolved or opened again (ADR 0208): its pin and line follow.
+      if (event.type === "message.resolved") {
+        cacheResolved(qc, orgId, event.channelId, event.messageId, event.resolved);
+      }
+      // A suggested code session was opened, kept here, or waits again (ADR 0215 §11): its card under the reply.
+      if (event.type === "code.suggestion") {
+        cacheCodeSuggestion(qc, orgId, event.channelId, event.messageId, event.suggestion);
       }
       // Act with undo: an agent message's receipts changed (made, undone, redone): replace the list.
       // A long work moved, updated or ended (ADR 0121): its anchor's line redraws; its card on the board too.

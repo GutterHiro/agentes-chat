@@ -21,6 +21,17 @@ import { type ActiveCover, activeCoversFrom, activeCoversTo } from "./approval-c
 import { resumeHeldRuns, wakeLine } from "./approval-order";
 import { addApprovalRules, addRoutineOwnActions, type RememberedKind, rememberedKindOf } from "./approval-rules";
 import { queueApprovalsDigest } from "./approvals-digest";
+import {
+  ACCESS_COLUMNS,
+  type AgentOwnerFields,
+  agentOwnerIds,
+  managesAgent,
+  managesAgentSql,
+  managesRoutinesOf,
+  ownsAgent,
+  ownsAgentSql,
+  REACH_COLUMNS,
+} from "./audience";
 import { recordAudit } from "./audit";
 import { approvalCardVia } from "./card-via";
 import { CONNECTOR_CATALOG } from "./connectors/catalog";
@@ -39,7 +50,7 @@ import { enqueue } from "./outbox";
 import { quietEnd, withMootRequest } from "./parked-asks";
 import { maySql, type RolePermission } from "./permissions";
 import { accountInUse } from "./standing";
-import { taskReaderSql } from "./task-access";
+import { fileConversationReaderSql, taskReaderSql } from "./task-access";
 import { AHEAD_GRACE_MS, type Approval, readsSqlOnly, routineCall } from "./tools/gateway";
 import { canonicalJson } from "./tools/json-schema";
 import { REQUEST_PERMISSION_TOOL } from "./tools/permission";
@@ -104,6 +115,8 @@ export interface ApprovalView {
   canDecide: boolean;
   /** The agent's owner at request time (they and admins may decide). */
   ownerUserId: string | null;
+  /** Its owner role at request time instead (ADR 0085, addendum of 2026-11-21): whoever holds it decides. */
+  ownerRoleId: string | null;
   /** When the approved action ran (null: not yet, or never). */
   executedAt: string | null;
   /**
@@ -521,6 +534,7 @@ export const approvalView = (a: Approval, canDecide = false, routine = false): A
   reason: a.reason,
   canDecide: canDecide && a.status === "pending",
   ownerUserId: a.ownerUserId,
+  ownerRoleId: a.ownerRoleId ?? null,
   executedAt: a.executedAt ? a.executedAt.toISOString() : null,
   result: resultOf(a),
   connector: null,
@@ -560,7 +574,8 @@ const BROWSER_PROFILE_PREFIX = "browser-profile:";
 
 /**
  * The keys that let someone decide any approval of its kind: `approve_actions`; for `request_permission`, the keys
- * that give the same access on the agent's page (`manage_agents`, and `manage_connectors` for a browser profile).
+ * that give the same access on the agent's page (`manage_agents`, and `manage_connectors` for a browser profile),
+ * where `manage_agents` counts only on an agent it reaches (`managesAgent`, ADR 0085 addendum of 2026-11-17).
  */
 export function decidingKeys(approval: Pick<Approval, "tool"> & Partial<Pick<Approval, "params">>): RolePermission[] {
   if (!adminsDecide(approval)) return ["approve_actions"];
@@ -570,23 +585,54 @@ export function decidingKeys(approval: Pick<Approval, "tool"> & Partial<Pick<App
     : ["manage_agents"];
 }
 
+/** The agent an access request asks for (`adminsDecide`), as `managesAgent` reads it. */
+type AskingAgent = Parameters<typeof managesAgent>[0];
+
 /**
- * Whether `actorId` may decide `approval`: whoever holds its `decidingKeys` (admins), the agent's owner
- * (`adminsDecide` aside), or for one asked with `request_approval` the people it names instead of the owner (ADR
- * 0126). The person whose request it was never decides it, unless they approve by role (admins, the role it names).
- * One in someone's own mailbox that someone else asked (`required`) only that person decides.
+ * Whether `actorId` may decide `approval`: whoever holds its `decidingKeys` (admins; for an access request, only on
+ * an agent they manage: `agent`, its agent, `managesAgent`), the agent's owner (`adminsDecide` aside), or for one
+ * asked with `request_approval` the people it names instead of the owner (ADR 0126). The person whose request it was
+ * never decides it, unless they approve by role (admins, the role it names). One in someone's own mailbox that someone
+ * else asked (`required`) only that person decides.
  */
 export function decides(
-  approval: Pick<Approval, "ownerUserId" | "tool"> & Partial<Pick<Approval, "approvers" | "params">>,
+  approval: Pick<Approval, "ownerUserId" | "tool"> & Partial<Pick<Approval, "ownerRoleId" | "approvers" | "params">>,
   actorId: string,
-  membership: Pick<Membership, "permissions"> | null,
+  membership: Pick<Membership, "permissions" | "roleIds"> | null,
+  agent: AskingAgent | null,
 ) {
   const named = approval.approvers;
   if (named?.required) return named.userIds.includes(actorId);
-  if (decidingKeys(approval).every((key) => can(membership, key))) return true;
+  if (
+    decidingKeys(approval).every((key) => can(membership, key)) &&
+    (!adminsDecide(approval) || (!!agent && managesAgent(agent, actorId, membership)))
+  )
+    return true;
   if (named?.requestedBy === actorId && !named.requesterDecides) return false;
   if (adminsDecide(approval)) return false;
-  return named?.userIds.length ? named.userIds.includes(actorId) : approval.ownerUserId === actorId;
+  return named?.userIds.length
+    ? named.userIds.includes(actorId)
+    : ownsAgent(ownerOfApproval(approval), actorId, membership?.roleIds ?? []);
+}
+
+/** Who answered for its agent when it asked: a person or a role (`ownsAgent` reads it as an agent's). */
+const ownerOfApproval = (
+  a: Pick<Approval, "ownerUserId"> & Partial<Pick<Approval, "ownerRoleId">>,
+): AgentOwnerFields => ({
+  ownerUserId: a.ownerUserId,
+  ownerRoleId: a.ownerRoleId ?? null,
+});
+
+/** The agents the access requests among `rows` ask for (`adminsDecide`), by id: what `decides` reads of each. */
+async function askingAgents(db: Executor, orgId: string, rows: readonly Pick<Approval, "agentId" | "tool">[]) {
+  const ids = [...new Set(rows.filter((r) => adminsDecide(r)).map((r) => r.agentId))];
+  const found = ids.length
+    ? await db
+        .select({ id: agents.id, ...REACH_COLUMNS })
+        .from(agents)
+        .where(and(eq(agents.orgId, orgId), inArray(agents.id, ids)))
+    : [];
+  return new Map<string, AskingAgent>(found.map((a) => [a.id, a]));
 }
 
 /** `decides` as SQL over `approvals` (the sidebar's count). */
@@ -594,7 +640,8 @@ export const decidableBySql = (actorId: string) => sql`(case
   when coalesce((${approvals.approvers} ->> 'required')::boolean, false)
     then ${approvals.approvers} -> 'userIds' @> to_jsonb(${actorId}::text)
   when ${approvals.tool} = ${REQUEST_PERMISSION_TOOL}
-    then ${maySql(approvals.orgId, actorId, "manage_agents")}
+    then exists (select 1 from ${agents} pa where pa.id = ${approvals.agentId} and pa.org_id = ${approvals.orgId}
+        and ${managesAgentSql("pa", sql`${actorId}::text`)})
       and (coalesce(${approvals.params} ->> 'permission', '') not like ${`${BROWSER_PROFILE_PREFIX}%`}
         or ${maySql(approvals.orgId, actorId, "manage_connectors")})
   when ${maySql(approvals.orgId, actorId, "approve_actions")} then true
@@ -602,7 +649,7 @@ export const decidableBySql = (actorId: string) => sql`(case
     and not coalesce((${approvals.approvers} ->> 'requesterDecides')::boolean, false) then false
   when jsonb_array_length(coalesce(${approvals.approvers} -> 'userIds', '[]'::jsonb)) > 0
     then ${approvals.approvers} -> 'userIds' @> to_jsonb(${actorId}::text)
-  else ${approvals.ownerUserId} is not distinct from ${actorId} end or ${coveredBySql(actorId)})`;
+  else coalesce(${ownsAgentSql("approvals", sql`${actorId}::text`)}, false) end or ${coveredBySql(actorId)})`;
 
 /** `coveredFor` as SQL: someone `actorId` covers now is asked this approval personally (ADR 0139). */
 const coveredBySql = (actorId: string) => sql`(not coalesce((${approvals.approvers} ->> 'required')::boolean, false)
@@ -649,7 +696,9 @@ export function coveredFor(approval: Coverable, actorId: string, covers: ActiveC
 }
 
 type Askable = Pick<Approval, "orgId" | "ownerUserId"> &
-  Partial<Pick<Approval, "tool" | "approvers" | "params" | "requestedByUserId" | "highRisk">>;
+  Partial<
+    Pick<Approval, "ownerRoleId" | "agentId" | "tool" | "approvers" | "params" | "requestedByUserId" | "highRisk">
+  >;
 
 /**
  * The people asked to decide (the card's badge, the live Aprovações list): whoever holds its `decidingKeys` (ADR 0085)
@@ -659,13 +708,17 @@ type Askable = Pick<Approval, "orgId" | "ownerUserId"> &
  */
 export async function approverIds(db: Database, approval: Askable, notified = false) {
   const keys = decidingKeys({ tool: approval.tool ?? "", params: approval.params ?? {} });
+  // An access request's `manage_agents` counts on its own agent only (`managesAgentSql`, ADR 0085 addendum of
+  // 2026-11-17): a private agent's request never goes to who merely holds the key.
+  const holds = (key: RolePermission) =>
+    key === "manage_agents" && approval.agentId
+      ? sql`exists (select 1 from ${agents} pa where pa.id = ${approval.agentId} and pa.org_id = ${approval.orgId}
+          and ${managesAgentSql("pa", sql`${organizationMembers.userId}`)})`
+      : maySql(approval.orgId, organizationMembers.userId, key);
   const members = await db
     .select({
       userId: organizationMembers.userId,
-      admin: sql<boolean>`(${sql.join(
-        keys.map((key) => maySql(approval.orgId, organizationMembers.userId, key)),
-        sql` and `,
-      )})`,
+      admin: sql<boolean>`(${sql.join(keys.map(holds), sql` and `)})`,
     })
     .from(organizationMembers)
     .innerJoin(users, eq(users.id, organizationMembers.userId))
@@ -674,14 +727,14 @@ export async function approverIds(db: Database, approval: Askable, notified = fa
   const member = new Set(members.map((m) => m.userId));
   const named = approval.approvers;
   if (named?.required) return named.userIds.filter((id) => member.has(id));
-  const owner =
-    approval.ownerUserId && member.has(approval.ownerUserId) && !adminsDecide({ tool: approval.tool ?? "" })
-      ? approval.ownerUserId
-      : null;
+  // Its owner, or whoever holds its owner role now (ADR 0085, addendum of 2026-11-21): a role is asked as a person is.
+  const owners = adminsDecide({ tool: approval.tool ?? "" })
+    ? []
+    : (await agentOwnerIds(db, approval.orgId, ownerOfApproval(approval))).filter((id) => member.has(id));
   const ids = new Set(
     named?.userIds.length
       ? named.userIds.filter((id) => member.has(id))
-      : [...(notified && owner ? [] : admins), ...(owner ? [owner] : [])],
+      : [...(notified && owners.length > 0 ? [] : admins), ...owners],
   );
   const requester = named?.requestedBy;
   if (requester && !named.requesterDecides && !admins.includes(requester)) ids.delete(requester);
@@ -698,7 +751,8 @@ export async function approverIds(db: Database, approval: Askable, notified = fa
 
 /**
  * Who is told an approval waits (inbox, its sound, push, email): the agent's responsável alone when it has one (and
- * whoever covers them), as its picker promises; the admins only for an agent with none. Admins still find it in
+ * whoever covers them), or everyone holding its owner role, as its picker promises; the admins only for an agent with
+ * neither. Admins still find it in
  * Aprovações and may decide it, silently.
  */
 export const notifiedIds = (db: Database, approval: Askable) => approverIds(db, approval, true);
@@ -726,24 +780,26 @@ export async function deciderName(db: Executor, byUserId: string, forUserId: str
 
 /**
  * The agents changed owner: their approvals still waiting, or approved ahead and not run, are decided against the new
- * owner from now on (`ownerUserId`, which `decides` and `approverIds` read), and the inbox follows: the old owner's
- * items go, the new owner's come. A `request_approval` that asked the owner (no one named) says the new names.
+ * owner (a person or a role) from now on (`ownerUserId`/`ownerRoleId`, which `decides` and `approverIds` read), and the
+ * inbox follows: the old owner's items go, the new owner's come. A `request_approval` that asked the owner (no one
+ * named) says the new names.
  */
 export async function repointApprovals(
   deps: { db: Database; pubsub?: PubSub },
   orgId: string,
   agentIds: string[],
-  ownerUserId: string | null,
+  owner: AgentOwnerFields,
 ) {
   if (agentIds.length === 0) return;
+  const { ownerUserId, ownerRoleId } = owner;
   const rows = await deps.db
     .update(approvals)
-    .set({ ownerUserId })
+    .set({ ownerUserId, ownerRoleId })
     .where(
       and(
         eq(approvals.orgId, orgId),
         inArray(approvals.agentId, agentIds),
-        sql`${approvals.ownerUserId} is distinct from ${ownerUserId}`,
+        sql`(${approvals.ownerUserId} is distinct from ${ownerUserId} or ${approvals.ownerRoleId} is distinct from ${ownerRoleId}::uuid)`,
         or(
           eq(approvals.status, "pending"),
           and(eq(approvals.status, "approved"), isNull(approvals.executedAt), sql`${approvals.runAt} is not null`),
@@ -963,7 +1019,8 @@ export async function decideApproval(
     .where(and(eq(approvals.id, approvalId), eq(approvals.orgId, orgId)));
   if (!current) throw new NotFoundError("Approval not found");
   const membership = await requirePermission(db, actorId, current.orgId, "read");
-  const direct = decides(current, actorId, membership);
+  const asking = await askingAgents(db, orgId, [current]);
+  const direct = decides(current, actorId, membership, asking.get(current.agentId) ?? null);
   const forUserId = direct ? null : coveredFor(current, actorId, await activeCoversTo(db, orgId, actorId, at));
   if (!direct && !forUserId) {
     throw new ForbiddenError(
@@ -1013,14 +1070,16 @@ export async function decideApproval(
       // The agent changed hands since it asked: what its old owner approves for good is dropped with the handover
       // (`dropAgentRules`), so they make none now. Locked, so a handover running now waits for this rule and drops it.
       const [agent] = await tx
-        .select({ ownerUserId: agents.ownerUserId })
+        .select({ ownerUserId: agents.ownerUserId, ownerRoleId: agents.ownerRoleId })
         .from(agents)
         .where(eq(agents.id, row.agentId))
         .for("share");
+      const changedHands =
+        agent?.ownerUserId !== row.ownerUserId || (agent?.ownerRoleId ?? null) !== (row.ownerRoleId ?? null);
       if (
         !can(membership, "approve_actions") &&
-        agent?.ownerUserId !== row.ownerUserId &&
-        agent?.ownerUserId !== actorId
+        changedHands &&
+        !(agent && ownsAgent(agent, actorId, membership?.roleIds ?? []))
       ) {
         throw new ConflictError("This request can't be approved for good", "approval.always_unavailable");
       }
@@ -1073,8 +1132,11 @@ export async function decideApprovals(
   if (input.via) for (const id of ids) vias.set(id, await approvalCardVia(db, orgId, input.via, id));
   const membership = await requirePermission(db, actorId, orgId, "read");
   const covers = await activeCoversTo(db, orgId, actorId, at);
-  const forUserOf = (r: Approval) => (decides(r, actorId, membership) ? null : coveredFor(r, actorId, covers));
-  const allowed = (r: Approval) => decides(r, actorId, membership) || forUserOf(r) !== null;
+  // The agents of the access requests among them, once their rows are read (`decides`).
+  let asking = new Map<string, AskingAgent>();
+  const direct = (r: Approval) => decides(r, actorId, membership, asking.get(r.agentId) ?? null);
+  const forUserOf = (r: Approval) => (direct(r) ? null : coveredFor(r, actorId, covers));
+  const allowed = (r: Approval) => direct(r) || forUserOf(r) !== null;
   /** Some still wait and none is this person's to decide. */
   let theirs = false;
   const decided = await db.transaction(async (tx) => {
@@ -1088,6 +1150,7 @@ export async function decideApprovals(
       : [];
     const out: Approval[] = [];
     const resumed = new Set<string>();
+    asking = await askingAgents(tx, orgId, rows);
     const mine = rows.filter(allowed);
     theirs = rows.length > 0 && mine.length === 0;
     const routine = input.only ? await routineIds(tx, mine) : null;
@@ -1325,10 +1388,19 @@ export async function cancelableAhead(db: Database, actorId: string, orgId: stri
         .from(routines)
         .where(and(eq(routines.id, current.routineId), eq(routines.orgId, orgId)))
     : [];
+  // Who manages the agent's routines (`managesRoutinesOf`, ADR 0085 addendum of 2026-11-17), not the key alone.
+  const owns = ownsAgent(ownerOfApproval(current), actorId, membership?.roleIds ?? []);
+  const [agent] =
+    owns || routine?.createdByUserId === actorId || can(membership, "approve_actions")
+      ? []
+      : await db
+          .select(ACCESS_COLUMNS)
+          .from(agents)
+          .where(and(eq(agents.id, current.agentId), eq(agents.orgId, orgId)));
   const may =
     can(membership, "approve_actions") ||
-    can(membership, "manage_routines") ||
-    current.ownerUserId === actorId ||
+    (!!agent && managesRoutinesOf(agent, actorId, membership)) ||
+    owns ||
     routine?.createdByUserId === actorId;
   if (!may) throw new ForbiddenError("Only who may decide it or manage its routine can cancel this");
   if (!current.runAt) throw new ConflictError("Only an action approved ahead can be canceled", "approval.not_ahead");
@@ -1426,7 +1498,7 @@ const seenBy = (db: Database, orgId: string, actorId: string) =>
   or(
     decidableBySql(actorId),
     eq(approvals.decidedByUserId, actorId),
-    eq(approvals.ownerUserId, actorId),
+    ownsAgentSql("approvals", sql`${actorId}::text`),
     sql`coalesce(${approvals.approvers} -> 'userIds', '[]'::jsonb) @> to_jsonb(${actorId}::text)`,
     inArray(
       approvals.channelId,
@@ -1435,8 +1507,10 @@ const seenBy = (db: Database, orgId: string, actorId: string) =>
         .from(channelMembers)
         .where(and(eq(channelMembers.orgId, orgId), eq(channelMembers.userId, actorId))),
     ),
-    // A task's conversation (ADR 0145): people are never its members; whoever sees the task sees its cards.
+    // A task's conversation (ADR 0145): people are never its members; whoever sees the task sees its cards. A live
+    // file's (ADR 0199): whoever reads the file.
     taskReaderSql(sql`${approvals.channelId}`, sql`${actorId}::text`),
+    fileConversationReaderSql(sql`${approvals.channelId}`, sql`${actorId}::text`),
   );
 
 /** One in someone's own connection (`approvers.personal`): only they and who is in its conversation list it. */
@@ -1484,11 +1558,11 @@ export async function listApprovals(
     )
     .orderBy(desc(approvals.createdAt))
     .limit(Math.min(options.limit ?? 100, 500));
-  const covers = await activeCoversTo(db, orgId, actorId);
+  const [covers, asking] = await Promise.all([activeCoversTo(db, orgId, actorId), askingAgents(db, orgId, rows)]);
   return viewsOf(
     db,
     rows,
-    (r) => decides(r, actorId, membership) || coveredFor(r, actorId, covers) !== null,
+    (r) => decides(r, actorId, membership, asking.get(r.agentId) ?? null) || coveredFor(r, actorId, covers) !== null,
     false,
     actorId,
   );

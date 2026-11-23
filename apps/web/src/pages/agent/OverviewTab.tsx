@@ -9,6 +9,7 @@ import { useTranslation } from "react-i18next";
 import { AgentSetupCard } from "@/components/AgentSetup";
 import { useOrg } from "@/components/org-context";
 import { useDirectory } from "@/hooks/useDirectory";
+import { ownsOrManages } from "@/lib/agent-edit";
 import { CardHead, useAgentEdit } from "./context";
 import { Ficha } from "./Ficha";
 import { ReadOnlyNote, RunIcon, runWhere } from "./pieces";
@@ -28,15 +29,15 @@ export function OverviewTab() {
   const locale = i18n.language;
   const { org } = useOrg();
   const dir = useDirectory(org.id);
-  const { agent, g, viewer, goTo, can, ownerFirst } = useAgentEdit();
+  const { agent, g, viewer, goTo, can, ownerLabel } = useAgentEdit();
   const detail = useAgentDetail(org.id, agent.id);
   const proposals = useProposals(org.id);
-  const runs = useRuns(org.id, agent.id, viewer !== "member");
+  const runs = useRuns(org.id, agent.id, ownsOrManages(viewer));
   const channels = useChannels(org.id);
   const pending = pendingOnAgent(proposals.data ?? [], agent.id);
   const approvals = detail.data?.pendingApprovals ?? 0;
   const recent = (runs.data ?? []).slice(0, RECENT);
-  const decides = viewer !== "member";
+  const decides = ownsOrManages(viewer);
   return (
     <>
       <ReadOnlyNote />
@@ -136,7 +137,7 @@ export function OverviewTab() {
           />
           {!decides ? (
             <p className="small muted">
-              {t("agentPage.activity.hidden", { owner: ownerFirst ?? t("roles.adminLower") })}
+              {t("agentPage.activity.hidden", { owner: ownerLabel ?? t("roles.adminLower") })}
             </p>
           ) : recent.length === 0 ? (
             <p className="small muted">{t("agent.runsNone")}</p>

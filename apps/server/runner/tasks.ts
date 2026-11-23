@@ -58,7 +58,7 @@ import { coAuthorLines } from "./co-authors";
 import { commandApproval, ownBranches } from "./command-gate";
 import { RunnerError } from "./errors";
 import { shellCommand, windowsTaskkill } from "./exec";
-import { envValue, findOnWindowsPath, NO_CWD_LOOKUP, winQuote } from "./executors";
+import { envValue, findOnWindowsPath, NO_CWD_LOOKUP, pickedCodex, winQuote } from "./executors";
 import { readJson, writeJson } from "./json-file";
 import {
   CODEX_MCP_ENV,
@@ -505,7 +505,7 @@ export function executorCommand(
     extra?: string[];
     /** Claude Code's permission mode (default `acceptEdits`; a mission's plan turn runs `dontAsk`). */
     permissionMode?: "acceptEdits" | "dontAsk";
-    /** Claude Code as the line starts it (default `claude`; on Windows its full path, quoted). */
+    /** The CLI as the line starts it, quoted (default `claude` / `codex`; Claude Code on Windows by its full path). */
     program?: string;
     /** Codex: where it works (`-C`), its sandbox, the file for its last message, the thread to resume. */
     codex?: { cwd: string; sandbox: "read-only" | "workspace-write"; lastFile: string; thread?: string };
@@ -532,7 +532,7 @@ export function executorCommand(
     const q = (v: string) => shellArg(v, options.platform);
     const c = options.codex;
     return [
-      "codex",
+      options.program ?? "codex",
       "exec",
       "--json",
       "--skip-git-repo-check",
@@ -1093,6 +1093,9 @@ export class TaskManager {
       if (!found) throw new RunnerError("not_found", "Claude Code is not installed on this computer.");
       program = winQuote(found);
     }
+    // The copy whose version the runner reported, not whichever the task's shell finds first.
+    const codexBin = executor === "codex" ? pickedCodex() : undefined;
+    if (codexBin) program = shellArg(codexBin);
     const signIn = executor === "shell" || hosted ? null : await this.signIn(executor, req.account, grant);
     if (signIn?.release) this.releases.set(taskId, signIn.release);
     const keyPlan = executor === "claude" && signIn?.planKey ? planOf(signIn.planKey.provider) : undefined;
@@ -1287,6 +1290,10 @@ export class TaskManager {
     }
     // A coding plan serves only its own models: Claude Code asks for one by the alias the plan maps (as a turn).
     if (planModel) extra.push("--model", planModel);
+    const taskDirs = [
+      ...(executor === "codex" && cwd !== folder ? [folder] : []),
+      ...(allowed?.grants ?? []).filter((g) => !isInside(g, cwd)),
+    ];
     const command = hosted
       ? "claude"
       : executorCommand(executor, {
@@ -1296,7 +1303,9 @@ export class TaskManager {
           session,
           resume,
           extra,
-          ...(allowed?.grants?.length ? { addDirs: allowed.grants.filter((g) => !isInside(g, cwd)) } : {}),
+          // Codex starting in a subfolder of the agent's own (a checkout, a code session's worktree, ADR 0215) keeps
+          // the whole folder writable, as its turns do (`brain-codex.ts`): a worktree's git data is in its checkout.
+          ...(taskDirs.length ? { addDirs: taskDirs } : {}),
           ...(executor === "codex"
             ? {
                 codex: {
@@ -1329,7 +1338,12 @@ export class TaskManager {
       if (executor !== "shell") writeFileSync(path.join(dir, "stdin.txt"), input, { mode: 0o600 });
       // A Codex task's sandbox is what holds it: no way out through the agent's containers service (ADR 0169).
       const own = executor === "codex" ? withoutContainers(process.env) : process.env;
-      const base: NodeJS.ProcessEnv = { ...own, ...(secrets?.env ?? {}) };
+      // No Claude Code auto memory, as on a turn: the workspace's memory is the agent's.
+      const base: NodeJS.ProcessEnv = {
+        ...own,
+        ...(secrets?.env ?? {}),
+        ...(executor === "claude" ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } : {}),
+      };
       // As a turn's (ADR 0041 §5): the account's folder is the CLI's home and nothing else signs it in; a plan's key
       // goes in the env under the plan's name, a token only on descriptor 3 (`spawnWrapper`).
       const env = signIn ? accountEnv(signIn.kind, signIn.home, base) : base;

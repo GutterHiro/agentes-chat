@@ -23,8 +23,8 @@ const { agentRuns, messages, routineRuns } = schema;
  *   message, work either started. It works as the agent itself, with the tools a person's run has (one a
  *   routine's report or work woke keeps within that routine's `brief`: see `run-policy.ts`); what
  *   needs a person's request (their channels, their reminders) is refused, and its approvals and pauses
- *   go to the agent's owner. A person writing into such a run (`steeredBy`) puts that person behind it
- *   from then on.
+ *   go to the agent's owner (or whoever holds its owner role, ADR 0085, addendum of 2026-11-21). A person writing
+ *   into such a run (`steeredBy`) puts that person behind it from then on.
  *
  * Message metadata alone never proves a person: only authorship and server-set links (a message's run, a
  * notice's run, the run on a task's or a folder request's line) are followed, within the workspace.
@@ -360,17 +360,24 @@ export async function runAuthorityById(db: Executor, orgId: string, runId: strin
       orgId: agentRuns.orgId,
       triggerMessageId: agentRuns.triggerMessageId,
       background: agentRuns.background,
-      transcript: transcriptKeys("steeredBy"),
     })
     .from(agentRuns)
     .where(and(eq(agentRuns.orgId, orgId), eq(agentRuns.id, runId)));
   if (!run) return { kind: "unattended", personId: null, reason: "agent" };
-  return runAuthority(db, run);
+  const authority = await runAuthority(db, run);
+  if (authority.kind !== "unattended") return authority;
+  // Any key read detoasts the whole transcript (a large jsonb): `steeredBy` only for a run no person is behind yet.
+  const [steered] = await db
+    .select({ transcript: transcriptKeys("steeredBy") })
+    .from(agentRuns)
+    .where(and(eq(agentRuns.orgId, orgId), eq(agentRuns.id, runId)));
+  const steeredBy = steeredByOf(steered?.transcript);
+  return steeredBy ? { kind: "person", personId: steeredBy } : authority;
 }
 
 /**
  * Who answers for a run's requests (approvals, questions, failures): the person behind it, else the
- * routine's creator. Null for an unattended run: the caller falls back to the agent's owner.
+ * routine's creator. Null for an unattended run: the caller falls back to the agent's owner (`agentOwnerIds`).
  */
 export const accountablePerson = (authority: RunAuthority): string | null =>
   authority.kind === "person"

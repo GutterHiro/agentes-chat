@@ -6,10 +6,10 @@ import { restrictionOf, workspaceHeadline } from "@agenteschat/client/lib/notifi
 import { teamWatchLine } from "@agenteschat/client/lib/team-watch";
 import { useTranslation } from "react-i18next";
 import { useOrg } from "@/providers/org";
+import { useRowDirectory } from "../chat/row-data";
 import { isDashboardNotice } from "../dashboards/logic";
 import { deviceNoticeOf, deviceNoticeTitle } from "../devices/logic";
 import { useNoticePerson } from "../devices/notices";
-import { useDirectory } from "../shared/hooks";
 import { runFailedLines, whoOf } from "./logic";
 
 /** Stands in for the names in the translated title, so they can be drawn bold. */
@@ -22,7 +22,8 @@ const NAMES = "⁣names⁣";
  */
 export function useNoticeTitle(n: AppNotification) {
   const { t, i18n } = useTranslation();
-  const dir = useDirectory();
+  // The app's one directory (`WorkspaceRowData`, above every screen and the island): no reads of its own per row.
+  const dir = useRowDirectory();
   // A restriction on agentes.chat Cloud: its whole line under the headline, and a held agent's name heads it.
   const restriction = restrictionOf(n);
   const held = restriction?.code === "agent.paused";
@@ -51,11 +52,17 @@ export function useNoticeTitle(n: AppNotification) {
   const orgName = useOrg().org?.name ?? "";
   // What the right hand found (ADR 0177 §1): the problem itself, in the reader's language. Who found it is the face.
   const problem = teamWatchLine(t, n);
+  // An agent's work paused on its monthly budget: its pause line, the agent's name bold.
+  const said =
+    problem ??
+    (n.kind === "budget_paused"
+      ? t("chat.body.usage_paused_budget", { agent: NAMES, percent: n.latest.percent ?? 0 })
+      : null);
   // A widget's alert or failure, an agent asking to publish a dashboard (ADR 0135): the dashboards' own words.
   const template = held
     ? t("standing.notification.agentHold", { name: NAMES })
-    : problem !== null
-      ? problem
+    : said !== null
+      ? said
       : device
         ? deviceNoticeTitle(t, device, NAMES, person, orgName)
         : n.kind === "app_created"

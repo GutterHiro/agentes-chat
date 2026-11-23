@@ -3,6 +3,7 @@ import {
   type AnyPgColumn,
   bigint,
   boolean,
+  check,
   foreignKey,
   index,
   integer,
@@ -17,7 +18,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { users } from "./auth";
 import { machineAccounts, machines } from "./machines";
-import { organizationMembers, organizations } from "./tenancy";
+import { organizationMembers, organizations, orgRoles } from "./tenancy";
 
 /**
  * API keys of model providers, owned by the organization (BYOK). Never
@@ -139,6 +140,13 @@ export const agents = pgTable(
     credentialId: uuid().references(() => providerCredentials.id, { onDelete: "set null" }),
     /** Person accountable for this agent (receives approvals, budget alerts). */
     ownerUserId: text().references(() => users.id, { onDelete: "set null" }),
+    /**
+     * A role accountable for it instead of a person (ADR 0085, addendum of 2026-11-21): whoever holds it at the time
+     * is its owner for what is asked and decided (approvals, notices, who changes it); what needs one person (a
+     * personal plan, a commit's signature) works as with no owner. At most one of this and `owner_user_id`; checked
+     * in code to be one of the workspace's own roles. Deleting the role leaves the agent with no owner.
+     */
+    ownerRoleId: uuid().references((): AnyPgColumn => orgRoles.id, { onDelete: "set null" }),
     /** Spend cap per calendar month (UTC) in nano-USD (1e-9 USD). Null = the organization's default (`organization_settings.default_agent_budget_nano_usd`). */
     monthlyBudgetNanoUsd: bigint({ mode: "number" }),
     /**
@@ -154,6 +162,13 @@ export const agents = pgTable(
      * asked, never that person. A plan only answering its owner (ADR 0059 §5) still keeps them out.
      */
     consultable: boolean().notNull().default(true),
+    /**
+     * "Quem pode editar" (ADR 0085, addendum of 2026-11-17): besides its owner and who manages it, the people named
+     * and whoever holds one of `editor_role_ids` at the time edit how it works (instructions, role, skills and
+     * routines) and see it. Talking to it is still its audience's.
+     */
+    editorUserIds: text().array().notNull().default(sql`'{}'::text[]`),
+    editorRoleIds: uuid().array().notNull().default(sql`'{}'::uuid[]`),
     /**
      * Autonomy brakes (ADR 0131): what it may start that nobody asked for directly (costly work, how much at once,
      * PRs an hour) and which agents it may call. Validated in code (`autonomySettings`); `{}` = the defaults.
@@ -329,6 +344,7 @@ export const agents = pgTable(
     unique().on(t.orgId, t.id),
     uniqueIndex("agents_one_coordinator").on(t.orgId).where(sql`${t.coordinator} and ${t.archivedAt} is null`),
     uniqueIndex("agents_one_right_hand").on(t.orgId).where(sql`${t.builtin} = 'right_hand'`),
+    check("agents_one_owner", sql`${t.ownerUserId} is null or ${t.ownerRoleId} is null`),
     // Machines are only soft-deleted (and `deleteMachine` clears this column first).
     foreignKey({ columns: [t.orgId, t.machineId], foreignColumns: [machines.orgId, machines.id] }),
     // No action (a composite SET NULL would null `org_id` too): code clears it before an account row goes.
@@ -459,7 +475,10 @@ export const rightHandBrains = pgTable(
     /** A computer brain (`claude_code`, `codex`…): an API key is the workspace's, never a person's. */
     brain: text().notNull(),
     brainModel: text(),
-    brainAccountId: uuid().notNull(),
+    /** Null: the plan the person's own computer is signed in to (`machineId`), as any agent's owner may use. */
+    brainAccountId: uuid(),
+    /** The computer whose own sign-in thinks, when there is no account: one the person paired. */
+    machineId: uuid(),
     /** Someone else's plan, given with `use_others_plans`: who gave it (themselves); its owner may take it back. */
     brainAccountLentBy: text().references(() => users.id, { onDelete: "set null" }),
     brainEffort: text(),
@@ -475,7 +494,9 @@ export const rightHandBrains = pgTable(
       columns: [t.orgId, t.brainAccountId],
       foreignColumns: [machineAccounts.orgId, machineAccounts.id],
     }).onDelete("cascade"),
+    foreignKey({ columns: [t.orgId, t.machineId], foreignColumns: [machines.orgId, machines.id] }).onDelete("cascade"),
     index().on(t.orgId, t.brainAccountId),
+    check("right_hand_brains_account_or_machine", sql`${t.brainAccountId} is not null or ${t.machineId} is not null`),
   ],
 );
 

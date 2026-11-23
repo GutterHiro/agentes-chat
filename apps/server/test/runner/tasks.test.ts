@@ -125,6 +125,10 @@ test("executor commands: Claude Code with stream-json and its session; prompts n
   expect(executorCommand("shell", { command: " make test " })).toBe("make test");
   // No `--full-auto` any more (removed from Codex): exec is unattended, the sandbox is the limit, no rule lifts it.
   expect(executorCommand("codex", {})).toBe("codex exec --json --skip-git-repo-check --ignore-rules -");
+  // The copy the runner picked (and reported), by its full path.
+  expect(executorCommand("codex", { program: "'/opt/codex app/codex'" })).toStartWith(
+    "'/opt/codex app/codex' exec --json",
+  );
   expect(() => executorCommand("shell", {})).toThrow("needs a command");
   expect(claudeSessionFile("/h/.claude", "/Users/me/agentes/dev-0193aaaa", "abc")).toBe(
     "/h/.claude/projects/-Users-me-agentes-dev-0193aaaa/abc.jsonl",
@@ -652,6 +656,7 @@ test.skipIf(!posix)(
       configDir: cli.folder("claude_code", FOLDER_ACCOUNT),
       oauthToken: null,
       settingsEnv: { ANTHROPIC_BASE_URL: "https://api.anthropic.com" },
+      autoMemoryOff: "1",
     });
 
     // One root keeps (protocol 29): the agent's own folder for it, and root's token on descriptor 3 only.
@@ -712,7 +717,11 @@ test.skipIf(!posix)(
     // CLI's "Please run /login".
     await tasks.start(AGENT, { taskId: id(43), executor: "claude", prompt: "Ship it" });
     await waitFor(() => Boolean(done(id(43))), 8000);
-    expect(cli.claudeRuns().at(-1)).toMatchObject({ configDir: path.join(cli.own, ".claude"), oauthToken: null });
+    expect(cli.claudeRuns().at(-1)).toMatchObject({
+      configDir: path.join(cli.own, ".claude"),
+      oauthToken: null,
+      autoMemoryOff: "1",
+    });
     const failed = done(id(43));
     expect(failed?.exitCode).toBe(1);
     expect(failed?.result).toStartWith(

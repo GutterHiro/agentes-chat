@@ -39,6 +39,7 @@ import {
   aheadEndLine,
   approvalDoing,
   approvalGroupWaitsFor,
+  approvalOwnerOf,
   approvalWaitsFor,
   requesterDecidesLine,
 } from "@agenteschat/client/lib/approval-words";
@@ -54,6 +55,7 @@ import {
   Chip,
   cx,
   DetailsDialog,
+  Disclosure,
   EmptyState,
   ExpiryFuse,
   type Fact,
@@ -71,6 +73,7 @@ import {
   Segmented,
   StepTrack,
   type StepTrackStep,
+  settleOnNextFrame,
   Tip,
   Toolbar,
   WorkSweep,
@@ -104,7 +107,7 @@ import {
 } from "@/components/ApprovalItem";
 import { WhenAsksLink } from "@/components/ApprovalsLevelDialog";
 import { ApprovalsTabs } from "@/components/ApprovalsTabs";
-import { ConnectorIcon } from "@/components/ConnectorCatalog";
+import { ConnectorIcon } from "@/components/ConnectorIcon";
 import { EmailLetter } from "@/components/EmailLetter";
 import { HelpLink } from "@/components/HelpLink";
 import { ErrorState, LoadingCards } from "@/components/Loading";
@@ -442,6 +445,7 @@ export function ApprovalsPage() {
             <div className={cx("ap-split", !missionsBelow && "page-split")}>
               <nav
                 className="ap-list"
+                ref={settleOnNextFrame}
                 data-scroll-restoration-id="approvals-list"
                 aria-label={t("approvals.review.list")}
               >
@@ -485,10 +489,7 @@ export function ApprovalsPage() {
                     const partial = approveAllPartial(
                       t,
                       items,
-                      approvalGroupWaitsFor(
-                        items,
-                        dir.memberById.get(first.ownerUserId ?? agent?.ownerUserId ?? "")?.name,
-                      ),
+                      approvalGroupWaitsFor(items, dir.ownerName(approvalOwnerOf(first, agent))),
                     );
                     return (
                       <section key={first.messageId ?? first.id} className="ap-group" aria-label={agent?.name}>
@@ -1018,7 +1019,8 @@ function ReqRow({ approval: a, selected, onOpen }: { approval: Approval; selecte
   const place = useLinePlace(a);
   const via = useApprovalVia(a);
   const leftMs = new Date(a.expiresAt).getTime() - Date.now();
-  const waits = approvalWaitsFor(a, dir.memberById.get(a.ownerUserId ?? agent?.ownerUserId ?? "")?.name);
+  // Its owner by name, a person's or a role's (ADR 0085, addendum of 2026-11-21): "Waiting for Engineering".
+  const waits = approvalWaitsFor(a, dir.ownerName(approvalOwnerOf(a, agent)));
   const where = approvalTarget(a) ?? via.name;
   // On its way (waiting for you, in line, running): when it was asked; decided: who decided and when.
   const live = p === "waiting" || p === "queued" || p === "running";
@@ -1249,7 +1251,11 @@ function ReviewBody({ approval: a, channel }: { approval: Approval; channel: str
   const why = approvalWords(a);
   const pr = prLink(a);
   const leftMs = new Date(a.expiresAt).getTime() - Date.now();
-  const waits = approvalWaitsFor(a, dir.memberById.get(a.ownerUserId ?? agent?.ownerUserId ?? "")?.name);
+  const owner = approvalOwnerOf(a, agent);
+  const waits = approvalWaitsFor(a, dir.ownerName(owner));
+  // A role answers for it (ADR 0085, addendum of 2026-11-21): who can decide reads that anyone holding it may, and the
+  // first decision counts. A request that named its deciders (`approvers`) is theirs.
+  const ownerRole = owner.ownerRoleId && !a.approvers?.label ? dir.roleName(owner.ownerRoleId) : undefined;
   const facts: Fact[] = [
     {
       key: "where",
@@ -1297,6 +1303,16 @@ function ReviewBody({ approval: a, channel }: { approval: Approval; channel: str
           value: t(`approvals.status.${PHASE_STATUS[p]}`),
           tone: p === "done" ? "done" : p === "failed" ? "waiting" : undefined,
         },
+    ...(p === "waiting" && a.canDecide && ownerRole
+      ? [
+          {
+            key: "decides",
+            icon: "person" as const,
+            label: t("approvals.review.decides"),
+            value: t("approvals.review.decidesRole", { role: ownerRole }),
+          },
+        ]
+      : []),
   ];
 
   const logo = useCallLogo();
@@ -1354,9 +1370,10 @@ function ReviewBody({ approval: a, channel }: { approval: Approval; channel: str
       <AheadLine approval={a} className="ap-card__ahead" />
       <Outcome approval={a} agent={agent} />
 
+      {/* One surface: the agent's why and what it will do as plain sections, how it got here one closed line. */}
       {why && (
-        <Card className="ap-review__card">
-          <CardHeader icon="message" title={t("approvals.review.why", { name })} />
+        <section className="ap-review__sect" aria-label={t("approvals.review.why", { name })}>
+          <h3 className="ac-grouphead">{t("approvals.review.why", { name })}</h3>
           <p className="ap-review__why">{inlineWords(why)}</p>
           {a.issue && (
             <Link
@@ -1367,33 +1384,29 @@ function ReviewBody({ approval: a, channel }: { approval: Approval; channel: str
               #{a.issue.number} {a.issue.title}
             </Link>
           )}
-        </Card>
+        </section>
       )}
 
-      <Card className="ap-review__card">
-        <CardHeader
-          icon={a.email ? "mail" : text ? "edit" : "approve"}
-          title={
-            a.email
-              ? t("approvals.review.email")
-              : text
-                ? t(
-                    p === "done"
-                      ? "approvals.review.textDone"
-                      : never
-                        ? "approvals.review.textNot"
-                        : "approvals.review.text",
-                  )
-                : t(
-                    p === "done" || p === "failed"
-                      ? "approvals.review.valuesDone"
-                      : never
-                        ? "approvals.review.valuesNot"
-                        : "approvals.review.values",
-                  )
-          }
-          subtitle={[via.name, target].filter(Boolean).join(" · ") || undefined}
-        />
+      <section className="ap-review__sect">
+        <h3 className="ac-grouphead">
+          {a.email
+            ? t("approvals.review.email")
+            : text
+              ? t(
+                  p === "done"
+                    ? "approvals.review.textDone"
+                    : never
+                      ? "approvals.review.textNot"
+                      : "approvals.review.text",
+                )
+              : t(
+                  p === "done" || p === "failed"
+                    ? "approvals.review.valuesDone"
+                    : never
+                      ? "approvals.review.valuesNot"
+                      : "approvals.review.values",
+                )}
+        </h3>
         {a.email ? (
           <EmailLetter email={a.email} full />
         ) : text ? (
@@ -1422,27 +1435,18 @@ function ReviewBody({ approval: a, channel }: { approval: Approval; channel: str
             {t("approvals.panel.openPr")}
           </a>
         )}
-      </Card>
+      </section>
 
-      <Card className="ap-review__card">
-        <CardHeader
-          icon="layers"
-          title={t("approvals.review.trail")}
-          subtitle={
-            around
-              ? [t("chat.work.steps", { count: track.length }), durationMs ? formatDuration(t, durationMs) : ""]
-                  .filter(Boolean)
-                  .join(" · ")
-              : undefined
-          }
-          action={
-            lines.length + afterLines.length > 0 ? (
-              <Button variant="ghost" size="sm" aria-expanded={steps} onClick={() => setSteps((o) => !o)}>
-                {steps ? t("approvals.review.hideSteps") : t("approvals.review.showSteps")}
-              </Button>
-            ) : undefined
-          }
-        />
+      <Disclosure
+        className="ap-review__trail"
+        summary={[
+          t("approvals.review.trail"),
+          around ? t("chat.work.steps", { count: track.length }) : "",
+          durationMs ? formatDuration(t, durationMs) : "",
+        ]
+          .filter(Boolean)
+          .join(" · ")}
+      >
         <StepTrack
           steps={track}
           className="ap-review__track"
@@ -1464,8 +1468,18 @@ function ReviewBody({ approval: a, channel }: { approval: Approval; channel: str
             <code>{`${a.tool}\n${JSON.stringify(a.params ?? {}, null, 2)}`}</code>
           </pre>
         )}
-        {(channel || text) && (
-          <p className="ac-card__foot ap-review__foot">
+        {(channel || text || lines.length + afterLines.length > 0) && (
+          <p className="ap-review__foot">
+            {lines.length + afterLines.length > 0 && (
+              <button type="button" className="ap-link" aria-expanded={steps} onClick={() => setSteps((o) => !o)}>
+                {steps ? t("approvals.review.hideSteps") : t("approvals.review.showSteps")}
+              </button>
+            )}
+            {text && (
+              <button type="button" className="ap-link" aria-expanded={tech} onClick={() => setTech((o) => !o)}>
+                {t("approvals.technical")}
+              </button>
+            )}
             {channel && (
               <Link
                 className="ap-link"
@@ -1476,14 +1490,9 @@ function ReviewBody({ approval: a, channel }: { approval: Approval; channel: str
                 {t("approvals.panel.viewChannel", { channel })}
               </Link>
             )}
-            {text && (
-              <button type="button" className="ap-link" aria-expanded={tech} onClick={() => setTech((o) => !o)}>
-                {t("approvals.technical")}
-              </button>
-            )}
           </p>
         )}
-      </Card>
+      </Disclosure>
     </div>
   );
 }
@@ -1577,9 +1586,9 @@ function DecisionBar({
         ? t("approvals.clickNoteAhead", { when: nextLabel(i18n.language, a.runAt) })
         : t("approvals.review.grants", { name, doing: approvalDoing(t, a, i18n.language) });
   return (
-    <div className={cx("ap-bar ap-bar--acts", floating && "ap-bar--float")}>
+    <div className={cx("ap-bar ap-bar--acts ac-tailrow", floating && "ap-bar--float")}>
       <WhenAsksLink approval={a} agent={agent} className="ap-bar__when" />
-      <div className="ap-bar__acts">
+      <div className="ap-bar__acts ac-tail">
         <Locked when={deciding}>
           {approveAlwaysOffered(a) && <ApproveAlways approval={a} agent={agent} also={also} />}
           <Button size="sm" onClick={onRefuse}>

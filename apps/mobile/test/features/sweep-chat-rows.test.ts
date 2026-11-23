@@ -41,7 +41,9 @@ describe("two agents' conversation", () => {
     // At the sides every screen and sheet keeps.
     expect(screen).toContain("pad: { paddingHorizontal: SCREEN_X },");
     expect(screen).toMatch(/foot: \{[^}]*paddingHorizontal: SCREEN_X,/);
-    expect(screen).toMatch(/head: \{ paddingHorizontal: SHEET_X, paddingTop: 24,/);
+    // Well clear of the grabber, the two agents' names alone: no line under them.
+    expect(screen).toMatch(/head: \{ paddingHorizontal: SHEET_X, paddingTop: 40,/);
+    expect(screen).not.toContain("subtitle=");
   });
 });
 
@@ -78,6 +80,13 @@ describe("buttons in the rows show what they do", () => {
     expect(line).toContain('toast({ title: t("work.shareFailed"), icon: "x" })');
     expect(line).not.toContain("warnSoft");
     expect(line).toContain('blocked: { fontWeight: "600" },');
+  });
+
+  test("a hand-off still out has Ver on its line under the reply, opening the two agents' talk as the working line's", () => {
+    const line = src("features/chat/WorkLine.tsx");
+    const handed = between(line, "export function HandedWorkLines(", "export function IssueWorkLine(");
+    expect(handed).toContain("talk && !workIsOver(w) ? () => router.push(consultationHref(talk, message.channelId))");
+    expect(line).toContain('if (onSee) all.push({ key: "see", rank: 1, label: t("run.strip.see"), onPress: onSee });');
   });
 
   test("letting someone talk to an agent can't be tapped twice while it saves", () => {
