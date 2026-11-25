@@ -57,7 +57,7 @@ Com a conta paga (US$ 99/ano) o app dura 1 ano e o push funciona — aí use o `
 
 ## Build diário no Google Drive
 
-O workflow roda sozinho todo dia às 03:00 (horário de Brasília) quando o app mudou no upstream, e manda o `.ipa`
+O n8n dispara o workflow todo dia às 05:15 (horário de Brasília) e ele compila quando o app mudou no upstream, e manda o `.ipa`
 para a pasta `agentes-ios` do Google Drive, substituindo o anterior. Ele só faz isso se o segredo `RCLONE_CONF`
 existir. Para criar (uma vez, abre o navegador para autorizar; `drive.file` só dá acesso aos arquivos que o rclone cria):
 
