@@ -3,11 +3,15 @@ name: iOS sideload (unsigned .ipa)
 # Builds an UNSIGNED .ipa for personal sideloading with AltStore/SideStore (free Apple ID), with no Apple secrets.
 # Same steps as ios.yml up to the archive, but with signing off; AltStore signs the app on the phone's side.
 # Builds this branch with upstream's main merged in. By hand (Actions → iOS sideload → Run workflow), or daily at
-# 03:00 BRT when upstream's app code changed in the last day. See SIDELOAD-iOS.md.
+# 05:15 BRT, dispatched by n8n with if_changed (GitHub's own schedule ran 8-11 h late), when upstream's app code changed
+# in the last day. See SIDELOAD-iOS.md.
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 6 * * *"
+    inputs:
+      if_changed:
+        description: Build only if upstream's app code changed in the last 25 h
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -31,7 +35,7 @@ jobs:
     steps:
       - id: changed
         run: |
-          if [ "${{ github.event_name }}" != schedule ]; then echo build=true >> "$GITHUB_OUTPUT"; exit 0; fi
+          if [ "${{ inputs.if_changed }}" != true ]; then echo build=true >> "$GITHUB_OUTPUT"; exit 0; fi
           git init -q up && cd up
           git fetch -q --filter=blob:none --shallow-since="2 days ago" "$UPSTREAM" main
           changes=$(git log --since="25 hours ago" --oneline FETCH_HEAD -- apps/mobile packages package.json bun.lock | wc -l)
